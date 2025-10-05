@@ -1,0 +1,30 @@
+version: "3.9"
+services:
+  api:
+    build: .
+    depends_on:
+      - db
+      - redis
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WHATSAPP_ACCOUNT_SID=${WHATSAPP_ACCOUNT_SID}
+      - WHATSAPP_AUTH_TOKEN=${WHATSAPP_AUTH_TOKEN}
+      - WHATSAPP_FROM_NUMBER=${WHATSAPP_FROM_NUMBER}
+      - WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL}
+      - WHATSAPP_WEBHOOK_SECRET=${WHATSAPP_WEBHOOK_SECRET}
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: whatsapp
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
