@@ -6,13 +6,10 @@ import time
 from typing import Any, Dict, Optional
 
 from openai import OpenAI
-from openai import APIConnectionError, APIError, RateLimitError, Timeout
-
 from config import settings
 from utils import logger
 
-
-# Manejo compatible de excepciones según la versión del SDK
+# Manejo compatible de excepciones según versión del SDK
 try:
     # SDK antiguo (<1.0)
     from openai.error import APIConnectionError, APIError, RateLimitError, Timeout
@@ -66,7 +63,12 @@ class OpenAIService:
                 logger.warning("openai_retry", extra={"attempt": attempts, "sleep": sleep})
                 time.sleep(sleep)
 
-    def chat_completion(self, *, messages: Any, response_format: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def chat_completion(
+        self,
+        *,
+        messages: Any,
+        response_format: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Call OpenAI ChatCompletion with retries."""
 
         self.rate_limiter.acquire()
