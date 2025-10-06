@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -32,6 +33,9 @@ class WhatsAppService:
     def validate_signature(self, url: str, params: Dict[str, str], signature: str) -> bool:
         """Validate Twilio webhook signature."""
 
+        if not signature:
+            logger.warning("whatsapp_signature_missing")
+            return False
         data = url
         for key in sorted(params):
             data += key + params[key]
@@ -40,8 +44,8 @@ class WhatsAppService:
             data.encode("utf-8"),
             hashlib.sha1,
         ).digest()
-        encoded = computed_signature.hex()
-        is_valid = hmac.compare_digest(encoded, signature.lower())
+        encoded = base64.b64encode(computed_signature).decode("utf-8")
+        is_valid = hmac.compare_digest(encoded, signature)
         logger.info("signature_validation", extra={"valid": is_valid})
         return is_valid
 
