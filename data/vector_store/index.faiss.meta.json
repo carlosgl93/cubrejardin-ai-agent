@@ -1,0 +1,17 @@
+[
+  {
+    "title": "catalogo productos",
+    "content": "# Catálogo de Productos\n\n1. Plan Básico\n   - Precio: 9.99 EUR/mes\n   - Incluye soporte por correo electrónico.\n2. Plan Profesional\n   - Precio: 24.99 EUR/mes\n   - Incluye soporte prioritario y panel analítico.\n3. Plan Empresarial\n   - Precio: 59.99 EUR/mes\n   - Incluye gestor dedicado y automatizaciones avanzadas.\n",
+    "id": 1
+  },
+  {
+    "title": "horarios de atencion",
+    "content": "# Horarios de Atención\n\n- Lunes a Viernes: 9:00 - 18:00 hrs\n- Sábados: 10:00 - 14:00 hrs\n- Domingos y feriados: cerrado\n\nContacto telefónico: +34 900 123 456\n",
+    "id": 2
+  },
+  {
+    "title": "politica de devoluciones",
+    "content": "# Política de Devoluciones\n\n- Los clientes pueden solicitar devoluciones dentro de los 30 días posteriores a la compra.\n- Los productos deben estar en su empaque original y sin uso.\n- El reembolso se procesa en un máximo de 7 días hábiles.\n",
+    "id": 3
+  }
+]

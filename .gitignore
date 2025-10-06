@@ -58,6 +58,13 @@ htmlcov/
 .ipynb_checkpoints
 
 # =========================
+# Dependencias externas que NO deben subirse
+# =========================
+pydantic/
+httpx/
+openai/
+
+# =========================
 # Otros
 # =========================
 *.sqlite3
