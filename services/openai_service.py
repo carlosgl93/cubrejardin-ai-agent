@@ -5,11 +5,21 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional
 
-import openai
+from openai import OpenAI
 from openai import APIConnectionError, APIError, RateLimitError, Timeout
 
 from config import settings
 from utils import logger
+
+
+# Manejo compatible de excepciones según la versión del SDK
+try:
+    # SDK antiguo (<1.0)
+    from openai.error import APIConnectionError, APIError, RateLimitError, Timeout
+except ImportError:
+    # SDK nuevo (>=1.0)
+    from openai import APIStatusError
+    APIConnectionError = APIError = RateLimitError = Timeout = APIStatusError
 
 
 class RateLimiter:
@@ -36,10 +46,10 @@ class RateLimiter:
 
 
 class OpenAIService:
-    """Wrapper around OpenAI API calls."""
+    """Wrapper around OpenAI API calls (modern client)."""
 
     def __init__(self, api_key: Optional[str] = None) -> None:
-        openai.api_key = api_key or settings.openai_api_key
+        self.client = OpenAI(api_key=api_key or settings.openai_api_key)
         self.rate_limiter = RateLimiter(settings.rate_limit_per_minute)
 
     def _retry(self, func, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -67,15 +77,18 @@ class OpenAIService:
         }
         if response_format:
             kwargs["response_format"] = response_format
+
         logger.info("openai_request", extra={"messages": len(messages)})
-        return self._retry(openai.ChatCompletion.create, **kwargs)  # type: ignore[return-value]
+        response = self._retry(self.client.chat.completions.create, **kwargs)
+        return response.model_dump()  # convierte a dict
 
     def embed(self, *, input_texts: Any) -> Dict[str, Any]:
         """Generate embeddings for provided texts."""
 
         self.rate_limiter.acquire()
-        return self._retry(
-            openai.Embedding.create,
+        response = self._retry(
+            self.client.embeddings.create,
             model=settings.embedding_model,
             input=input_texts,
-        )  # type: ignore[return-value]
+        )
+        return response.model_dump()  # también como dict

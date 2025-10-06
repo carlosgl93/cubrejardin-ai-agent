@@ -2,22 +2,28 @@
 
 from functools import lru_cache
 from typing import List
-
-from pydantic import BaseSettings, Field, HttpUrl
-
-
+from dataclasses import dataclass
+from pydantic import Field, HttpUrl
+from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Configuration values loaded from environment variables."""
 
+    model_config = SettingsConfigDict(
+    env_file=".env",
+    env_file_encoding="utf-8",
+    case_sensitive=False,   
+    extra="ignore",
+    env_prefix="",
+    )
     app_name: str = Field(default="WhatsApp AI Agent")
     environment: str = Field(default="development")
     debug: bool = Field(default=False)
 
     openai_api_key: str = Field(..., env="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4-turbo-preview")
+    openai_model: str = Field(default="gpt-5-nano")
     openai_temperature: float = Field(default=0.2)
 
-    embedding_model: str = Field(default="text-embedding-3-small")
+    embedding_model: str = Field(default="gpt-5-nano") # text-embedding-3-small
 
     database_url: str = Field(default="postgresql+psycopg://postgres:postgres@db:5432/whatsapp")
     redis_url: str = Field(default="redis://redis:6379/0")
@@ -40,9 +46,6 @@ class Settings(BaseSettings):
 
     admin_allowed_origins: List[str] = Field(default_factory=lambda: ["*"])
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
 
 
 @lru_cache
@@ -53,3 +56,4 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+print(">>> SETTINGS LOADED:", settings.model_dump())
