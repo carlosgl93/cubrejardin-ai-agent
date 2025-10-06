@@ -1,4 +1,4 @@
-"""OpenAI client service with retry and rate limiting."""
+"""OpenAI client service with retry and rate limiting (new SDK)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,8 @@ import time
 from typing import Any, Dict, Optional
 
 from openai import OpenAI
-from openai import APIConnectionError, APIError, RateLimitError, Timeout
-
 from config import settings
 from utils import logger
-
 
 # Manejo compatible de excepciones según la versión del SDK
 try:
@@ -62,11 +59,13 @@ class OpenAIService:
                 if attempts >= 5:
                     logger.error("openai_max_retries", extra={"error": str(exc)})
                     raise
-                sleep = min(2 ** attempts, 10)
+                sleep = min(2**attempts, 10)
                 logger.warning("openai_retry", extra={"attempt": attempts, "sleep": sleep})
                 time.sleep(sleep)
 
-    def chat_completion(self, *, messages: Any, response_format: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def chat_completion(
+        self, *, messages: Any, response_format: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Call OpenAI ChatCompletion with retries."""
 
         self.rate_limiter.acquire()
@@ -91,4 +90,4 @@ class OpenAIService:
             model=settings.embedding_model,
             input=input_texts,
         )
-        return response.model_dump()  # también como dict
+        return response.model_dump()

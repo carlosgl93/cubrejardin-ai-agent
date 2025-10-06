@@ -35,7 +35,10 @@ class Conversation(BaseModel):
 class Escalation(BaseModel):
     conversation_id: int = 0
     status: str = "pending"
-    notes: Optional[str] = None
+    handoff_type: str = "to_human"  # indica si fue a humano o de vuelta al bot
+    metadata: Dict[str, Any] = field(default_factory=dict)  # detalles de la escalada
+    timestamp: datetime = field(default_factory=utc_now)  # cuándo ocurrió
+    notes: Optional[str] = None  # comentarios opcionales
 
 
 @dataclass

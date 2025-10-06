@@ -60,9 +60,11 @@ class AgentOrchestrator:
             response = "Gracias por contactarnos. Actualmente no podemos procesar este mensaje."
             self._store_message(user_number, "system", response)
             return response
+
         if guardian_result.category == "ESCALATION_REQUEST":
             conv = self._store_message(user_number, "system", "Escalación solicitada")
-            return self.handoff.escalate(conv, user_number)
+            return self.handoff.escalate(conv, user_number, metadata={"reason": "user_request"})
+
         if guardian_result.category == "GREETING":
             response = "¡Hola! ¿En qué puedo ayudarte hoy?"
             self._store_message(user_number, "assistant", response)
@@ -75,7 +77,9 @@ class AgentOrchestrator:
             rag_response.answer,
             {"confidence": rag_response.confidence, "sources": rag_response.sources},
         )
+
         if rag_response.confidence < 0.5:
             conv = self._store_message(user_number, "system", "Confianza baja, escalando")
-            self.handoff.escalate(conv, user_number)
+            self.handoff.escalate(conv, user_number, metadata={"reason": "low_confidence"})
+
         return rag_response.answer
