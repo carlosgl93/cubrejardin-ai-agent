@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from models.database import InMemorySession, LearningQueueEntry
+from models.database import InMemorySession, KnowledgeBaseDocument, LearningQueueEntry
 from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
 from utils import logger
@@ -28,11 +28,16 @@ class LearningService:
         """Store a human-provided answer for later validation."""
 
         entry = LearningQueueEntry(
-            conversation_id=conversation_id,
-            user_message=user_message,
-            human_answer=human_answer,
-            source=source,
+            question=user_message,
+            answer=human_answer,
             metadata=metadata or {},
+        )
+        # extra attributes for traceability
+        entry.metadata.update(
+            {
+                "conversation_id": conversation_id,
+                "source": source,
+            }
         )
         self.session.add(entry)
         self.session.commit()
@@ -53,7 +58,7 @@ class LearningService:
         entry = self.session.get(LearningQueueEntry, entry_id)
         if not entry:
             return None
-        entry.validated = True
+        entry.metadata["validated"] = True
         self.session.commit()
         logger.info("learning_entry_validated", extra={"entry_id": entry_id})
         return entry
@@ -70,30 +75,51 @@ class LearningService:
         entries = [
             entry
             for entry in self.session.query(LearningQueueEntry)
-            if entry.validated and (entry_ids is None or entry.id in entry_ids)
+            if entry.metadata.get("validated") and (entry_ids is None or entry.id in entry_ids)
         ]
         if not entries:
             logger.info("learning_no_validated_entries", extra={"entry_ids": entry_ids or []})
             return 0
+
         metadatas: List[Dict[str, Any]] = []
         embeddings: List[List[float]] = []
         for entry in entries:
-            response = openai_service.embed(input_texts=[entry.user_message])
+            response = openai_service.embed(input_texts=[entry.question])
             embedding = response["data"][0]["embedding"]
             embeddings.append(embedding)
             metadatas.append(
                 {
                     "id": f"learning-{entry.id}",
-                    "conversation_id": entry.conversation_id,
+                    "conversation_id": entry.metadata.get("conversation_id"),
                     "title": entry.metadata.get("title", "Aprendizaje validado"),
-                    "content": entry.human_answer,
-                    "question": entry.user_message,
-                    "source": entry.source,
+                    "content": entry.answer,
+                    "question": entry.question,
+                    "source": entry.metadata.get("source", "human_handoff"),
                 }
             )
+
         vector_store.add_embeddings(embeddings, metadatas)
+
+        # Opcional: convertir entradas validadas en documentos de KB
         for entry in entries:
+            document = KnowledgeBaseDocument(
+                title=entry.metadata.get("title", f"Entry {entry.id}"),
+                content=entry.answer,
+                metadata=entry.metadata,
+            )
+            self.session.add(document)
             self.session.delete(entry)
+
         self.session.commit()
         logger.info("learning_entries_ingested", extra={"count": len(entries)})
         return len(entries)
+
+    def reject_examples(self, entry_ids: List[int]) -> None:
+        """Reject learning entries."""
+
+        for entry_id in entry_ids:
+            entry = self.session.get(LearningQueueEntry, entry_id)
+            if entry:
+                self.session.delete(entry)
+        self.session.commit()
+        logger.info("learning_rejected", extra={"count": len(entry_ids)})

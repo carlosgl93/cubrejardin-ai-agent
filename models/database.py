@@ -35,28 +35,17 @@ class Conversation(BaseModel):
 class Escalation(BaseModel):
     conversation_id: int = 0
     status: str = "pending"
-    handoff_type: str = "to_human"
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=utc_now)
-    notes: Optional[str] = None
+    handoff_type: str = "to_human"  # indica si fue a humano o de vuelta al bot
+    metadata: Dict[str, Any] = field(default_factory=dict)  # detalles de la escalada
+    timestamp: datetime = field(default_factory=utc_now)  # cuándo ocurrió
+    notes: Optional[str] = None  # comentarios opcionales
 
 
 @dataclass
 class LearningQueueEntry(BaseModel):
-    conversation_id: int = 0
-    user_message: str = ""
-    human_answer: str = ""
-    source: str = "human_handoff"
-    validated: bool = False
+    question: str = ""
+    answer: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
-
-    # Example:
-    # LearningQueueEntry(
-    #     conversation_id=42,
-    #     user_message="¿Cuál es el estado de mi pedido?",
-    #     human_answer="Tu pedido se entregará mañana entre 9 am y 11 am.",
-    #     source="human_handoff",
-    # )
 
 
 @dataclass

@@ -23,16 +23,20 @@ async def whatsapp_webhook(
 
     form = await request.form()
     payload = dict(form)
+
+    # ✅ Validar firma Twilio
     if not whatsapp_service.validate_signature(str(request.url), payload, x_twilio_signature):
         logger.warning(
             "webhook_invalid_signature",
             extra={"url": str(request.url), "from": payload.get("From", "")},
         )
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+
     user_number = payload.get("From", "")
     body = payload.get("Body", "")
     if not user_number or not body:
         raise HTTPException(status_code=400, detail="Invalid payload")
+
     logger.info("webhook_received", extra={"user": user_number})
     response_text = orchestrator.process_message(user_number, body)
     return {"message": response_text}

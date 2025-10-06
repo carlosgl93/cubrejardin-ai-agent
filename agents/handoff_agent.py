@@ -48,7 +48,7 @@ class HandoffAgent:
                 recipient_id=conversation.user_number,
                 metadata=metadata or {},
             )
-        except Exception as exc:  # pragma: no cover - logged and bubbled
+        except Exception as exc:  # pragma: no cover
             logger.error(
                 "handoff_pass_control_error",
                 extra={"conversation_id": conversation.id, "error": str(exc)},
@@ -73,7 +73,7 @@ class HandoffAgent:
                 recipient_id=conversation.user_number,
                 metadata=metadata or {},
             )
-        except Exception as exc:  # pragma: no cover - logged and bubbled
+        except Exception as exc:  # pragma: no cover
             logger.error(
                 "handoff_take_control_error",
                 extra={"conversation_id": conversation.id, "error": str(exc)},

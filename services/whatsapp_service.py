@@ -21,21 +21,22 @@ class WhatsAppService:
 
     def __init__(self) -> None:
         self.client = Client(settings.whatsapp_account_sid, settings.whatsapp_auth_token)
-        self._graph_base = f"https://graph.facebook.com/v17.0/{settings.whatsapp_phone_number_id}"
+        # Base para llamadas a la Graph API de Meta
+        self._graph_base = f"https://graph.facebook.com/v17.0/{getattr(settings, 'whatsapp_phone_number_id', '000000000000000')}"
         self._http_client = httpx.Client(timeout=10.0)
 
     def _graph_headers(self) -> Dict[str, str]:
         return {
-            "Authorization": f"Bearer {settings.facebook_page_access_token}",
+            "Authorization": f"Bearer {getattr(settings, 'facebook_page_access_token', '')}",
             "Content-Type": "application/json",
         }
 
     def validate_signature(self, url: str, params: Dict[str, str], signature: str) -> bool:
         """Validate Twilio webhook signature."""
-
         if not signature:
             logger.warning("whatsapp_signature_missing")
             return False
+
         data = url
         for key in sorted(params):
             data += key + params[key]
@@ -51,7 +52,6 @@ class WhatsAppService:
 
     def send_message(self, to: str, body: str) -> None:
         """Send WhatsApp message via Twilio."""
-
         try:
             message = self.client.messages.create(
                 body=body,
@@ -64,11 +64,10 @@ class WhatsAppService:
             raise
 
     def pass_thread_control(self, recipient_id: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, object]:
-        """Invoke Meta's pass_thread_control endpoint."""
-
+        """Invoke Meta's pass_thread_control endpoint (handover to human)."""
         payload = {
             "recipient": {"id": recipient_id},
-            "target_app_id": settings.facebook_target_app_id,
+            "target_app_id": getattr(settings, "facebook_target_app_id", "263902037430900"),
             "metadata": json.dumps(metadata or {}),
         }
         try:
@@ -91,11 +90,10 @@ class WhatsAppService:
         return response.json()
 
     def take_thread_control(self, recipient_id: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, object]:
-        """Invoke Meta's take_thread_control endpoint."""
-
+        """Invoke Meta's take_thread_control endpoint (recover control for bot)."""
         payload = {
             "recipient": {"id": recipient_id},
-            "target_app_id": settings.facebook_target_app_id,
+            "target_app_id": getattr(settings, "facebook_target_app_id", "263902037430900"),
             "metadata": json.dumps(metadata or {}),
         }
         try:

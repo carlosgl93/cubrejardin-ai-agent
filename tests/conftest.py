@@ -6,10 +6,12 @@ import sys
 import os
 from pathlib import Path
 
+# Asegurar que la raíz del proyecto esté en sys.path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Variables de entorno mínimas necesarias para ejecutar pruebas
 _REQUIRED_ENV = {
     "OPENAI_API_KEY": "test-key",
     "WHATSAPP_ACCOUNT_SID": "AC00000000000000000000000000000000",
@@ -22,4 +24,5 @@ _REQUIRED_ENV = {
 for env_key, env_value in _REQUIRED_ENV.items():
     os.environ.setdefault(env_key, env_value)
 
+# Ignorar este script al correr pytest
 collect_ignore_glob = ["scripts/test_conversation.py"]

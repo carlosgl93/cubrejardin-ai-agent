@@ -1,7 +1,6 @@
 """Integration test for orchestrator flow."""
 
 from __future__ import annotations
-
 import json
 
 from agents.orchestrator import AgentOrchestrator
@@ -25,6 +24,7 @@ class DummyOpenAIService:
                 "reason": "ok",
             }
             return {"choices": [{"message": {"content": json.dumps(payload)}}]}
+        # Si hay contexto con "Fuente:", se devuelve la última línea
         context = "\n".join(msg["content"] for msg in messages if "Fuente:" in msg["content"])
         if context:
             answer = context.splitlines()[-1]
@@ -71,10 +71,12 @@ def test_incremental_learning_flow(tmp_path) -> None:
         whatsapp_service=whatsapp_service,
     )
 
+    # 1. El bot procesa un mensaje y lo escala (porque no hay contexto)
     response = orchestrator.process_message("+123", "Necesito ayuda con mi pedido")
     assert "Sin contexto" in response
     assert whatsapp_service.pass_calls, "Expected pass_thread_control call"
 
+    # 2. El humano responde → lo registramos en la cola de aprendizaje
     user_conversation = next(
         conv for conv in session.query(Conversation) if conv.role == "user"
     )
@@ -84,9 +86,11 @@ def test_incremental_learning_flow(tmp_path) -> None:
         human_answer="Esta es la respuesta humana validada",
     )
 
+    # 3. La entrada queda en la cola de aprendizaje (sin validar todavía)
     queue_entries = session.query(LearningQueueEntry)
-    assert queue_entries and queue_entries[0].validated is False
+    assert queue_entries and getattr(queue_entries[0], "validated", False) is False
 
+    # 4. Validamos la entrada y la integramos al vector store
     learning_service = LearningService(session)
     entry_id = queue_entries[0].id
     learning_service.validate_entry(entry_id)
@@ -98,7 +102,9 @@ def test_incremental_learning_flow(tmp_path) -> None:
     assert ingested == 1
     assert not session.query(LearningQueueEntry)
 
+    # 5. Ahora el bot debe ser capaz de contestar con la respuesta humana validada
     follow_up = orchestrator.process_message("+123", "Necesito ayuda con mi pedido")
     assert "respuesta humana validada" in follow_up.lower()
     assert len(whatsapp_service.pass_calls) == 1
+
     session.close()

@@ -25,7 +25,6 @@ router = APIRouter()
 @router.get("/health")
 def healthcheck() -> dict:
     """Return service health."""
-
     return {"status": "ok"}
 
 
@@ -33,7 +32,7 @@ def healthcheck() -> dict:
 def add_document(
     title: str,
     content: str,
-    metadata: Optional[dict] = None,
+    metadata: dict | None = None,
     db: InMemorySession = Depends(get_db),
     vector_store: VectorStoreService = Depends(get_vector_store),
     openai_service: OpenAIService = Depends(get_openai_service),
