@@ -1,11 +1,14 @@
-"""WhatsApp service integration via Twilio."""
+"""WhatsApp service integration via Twilio and Meta handover protocol."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
-from typing import Dict
+import json
+from typing import Any, Dict, Optional
 
+import httpx
 from twilio.base.exceptions import TwilioRestException
 from twilio.rest import Client
 
@@ -14,13 +17,25 @@ from utils import logger
 
 
 class WhatsAppService:
-    """Handle WhatsApp message sending and validation."""
+    """Handle WhatsApp message sending, validation, and handover."""
 
     def __init__(self) -> None:
         self.client = Client(settings.whatsapp_account_sid, settings.whatsapp_auth_token)
+        # Base para llamadas a la Graph API de Meta
+        self._graph_base = f"https://graph.facebook.com/v17.0/{getattr(settings, 'whatsapp_phone_number_id', '000000000000000')}"
+        self._http_client = httpx.Client(timeout=10.0)
+
+    def _graph_headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {getattr(settings, 'facebook_page_access_token', '')}",
+            "Content-Type": "application/json",
+        }
 
     def validate_signature(self, url: str, params: Dict[str, str], signature: str) -> bool:
         """Validate Twilio webhook signature."""
+        if not signature:
+            logger.warning("whatsapp_signature_missing")
+            return False
 
         data = url
         for key in sorted(params):
@@ -30,14 +45,13 @@ class WhatsAppService:
             data.encode("utf-8"),
             hashlib.sha1,
         ).digest()
-        encoded = computed_signature.hex()
-        is_valid = hmac.compare_digest(encoded, signature.lower())
+        encoded = base64.b64encode(computed_signature).decode("utf-8")
+        is_valid = hmac.compare_digest(encoded, signature)
         logger.info("signature_validation", extra={"valid": is_valid})
         return is_valid
 
     def send_message(self, to: str, body: str) -> None:
         """Send WhatsApp message via Twilio."""
-
         try:
             message = self.client.messages.create(
                 body=body,
@@ -48,3 +62,55 @@ class WhatsAppService:
         except TwilioRestException as exc:
             logger.error("whatsapp_send_error", extra={"error": str(exc)})
             raise
+
+    def pass_thread_control(self, recipient_id: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, object]:
+        """Invoke Meta's pass_thread_control endpoint (handover to human)."""
+        payload = {
+            "recipient": {"id": recipient_id},
+            "target_app_id": getattr(settings, "facebook_target_app_id", "263902037430900"),
+            "metadata": json.dumps(metadata or {}),
+        }
+        try:
+            response = self._http_client.post(
+                f"{self._graph_base}/pass_thread_control",
+                headers=self._graph_headers(),
+                json=payload,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "whatsapp_pass_thread_control_error",
+                extra={"status_code": exc.response.status_code, "body": exc.response.text},
+            )
+            raise
+        except httpx.HTTPError as exc:
+            logger.error("whatsapp_pass_thread_control_http_error", extra={"error": str(exc)})
+            raise
+        logger.info("whatsapp_pass_thread_control_success", extra={"recipient": recipient_id})
+        return response.json()
+
+    def take_thread_control(self, recipient_id: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, object]:
+        """Invoke Meta's take_thread_control endpoint (recover control for bot)."""
+        payload = {
+            "recipient": {"id": recipient_id},
+            "target_app_id": getattr(settings, "facebook_target_app_id", "263902037430900"),
+            "metadata": json.dumps(metadata or {}),
+        }
+        try:
+            response = self._http_client.post(
+                f"{self._graph_base}/take_thread_control",
+                headers=self._graph_headers(),
+                json=payload,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "whatsapp_take_thread_control_error",
+                extra={"status_code": exc.response.status_code, "body": exc.response.text},
+            )
+            raise
+        except httpx.HTTPError as exc:
+            logger.error("whatsapp_take_thread_control_http_error", extra={"error": str(exc)})
+            raise
+        logger.info("whatsapp_take_thread_control_success", extra={"recipient": recipient_id})
+        return response.json()
