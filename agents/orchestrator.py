@@ -53,8 +53,8 @@ class AgentOrchestrator:
 
         cleaned = sanitize_text(message)
         guardian_result: GuardianResult = self.guardian.classify(cleaned)
-        self._store_message(user_number, "user", cleaned, guardian_result.dict())
-        logger.info("guardian_classification", extra=guardian_result.dict())
+        self._store_message(user_number, "user", cleaned, guardian_result.model_dump())
+        logger.info("guardian_classification", extra=guardian_result.model_dump())
 
         if guardian_result.category in {"SPAM", "SENSITIVE", "OFF_TOPIC"}:
             response = "Gracias por contactarnos. Actualmente no podemos procesar este mensaje."

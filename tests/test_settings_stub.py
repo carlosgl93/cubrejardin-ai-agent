@@ -22,7 +22,7 @@ def test_settings_apply_defaults(monkeypatch):
 
     assert settings.openai_api_key == "sk-test"
     assert settings.whatsapp_from_number == "+12345"
-    assert settings.openai_model == "gpt-4-turbo-preview"
+    assert settings.openai_model == "gpt-4o-mini"
     assert settings.rate_limit_per_minute == 5
     assert settings.admin_allowed_origins == ["*"]
 
@@ -82,7 +82,7 @@ def test_settings_reload_uses_cached_env(tmp_path, monkeypatch):
     assert settings.whatsapp_account_sid == "ACFILE"
     assert settings.whatsapp_auth_token == "file-token"
     assert settings.whatsapp_from_number == "+1999"
-    assert settings.webhook_base_url == "https://file.test"
+    assert str(settings.webhook_base_url) == "https://file.test/"
     assert settings.webhook_secret == "file-secret"
 
     importlib.reload(module)

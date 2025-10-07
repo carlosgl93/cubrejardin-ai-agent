@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # 🌐 Webhook
     webhook_base_url: HttpUrl = Field(..., validation_alias="WEBHOOK_BASE_URL")
-    whatsapp_webhook_secret: str = Field(..., validation_alias="WHATSAPP_WEBHOOK_SECRET")
+    webhook_secret: str = Field(..., validation_alias="WHATSAPP_WEBHOOK_SECRET")
 
     # 📚 Vector store
     vector_store_path: str = "data/vector_store/index.faiss"
