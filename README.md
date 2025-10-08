@@ -15,7 +15,7 @@ flowchart TD
     D -->|Consulta Vector Store| E[FAISS]
     D -->|Consultas DB| F[(PostgreSQL)]
     H -->|Notificación| I[(Ticketing Webhook)]
-    D -->|Confianza Baja (<0.5)| H
+    D -->|Confianza Baja| H
     H -->|Confirmación usuario| J[Meta WhatsApp]
     D -->|Respuesta| J
     subgraph Aprendizaje Incremental
@@ -194,4 +194,3 @@ docker compose exec api bash -lc 'python scripts/load_documents.py'
 ## Licencia
 
 Ver archivo `LICENSE`.
-
