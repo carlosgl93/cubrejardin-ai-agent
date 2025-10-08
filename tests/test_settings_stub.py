@@ -12,30 +12,36 @@ def test_settings_apply_defaults(monkeypatch):
     """Defaults and environment variables should populate fields."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("WHATSAPP_ACCOUNT_SID", "AC123")
-    monkeypatch.setenv("WHATSAPP_AUTH_TOKEN", "token123")
-    monkeypatch.setenv("WHATSAPP_FROM_NUMBER", "+12345")
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "1234567890")
+    monkeypatch.setenv("FACEBOOK_PAGE_ACCESS_TOKEN", "token123")
+    monkeypatch.setenv("FACEBOOK_APP_SECRET", "appsecret")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "verify-token")
     monkeypatch.setenv("WEBHOOK_BASE_URL", "https://callback.example")
-    monkeypatch.setenv("WHATSAPP_WEBHOOK_SECRET", "secret123")
+    monkeypatch.setenv("DEFAULT_TEMPLATE_NAME", "session_expired")
+    monkeypatch.setenv("TEMPLATE_MAPPING", '{"handoff":"handoff_notification"}')
 
     settings = Settings()
 
     assert settings.openai_api_key == "sk-test"
-    assert settings.whatsapp_from_number == "+12345"
+    assert settings.whatsapp_phone_number_id == "1234567890"
     assert settings.openai_model == "gpt-4o-mini"
     assert settings.rate_limit_per_minute == 5
     assert settings.admin_allowed_origins == ["*"]
+    assert settings.default_template_name == "session_expired"
+    assert settings.template_mapping["handoff"] == "handoff_notification"
 
 
 def test_settings_default_factory_creates_new_instances(monkeypatch):
     """default_factory values should not leak between instances."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-another")
-    monkeypatch.setenv("WHATSAPP_ACCOUNT_SID", "AC456")
-    monkeypatch.setenv("WHATSAPP_AUTH_TOKEN", "token456")
-    monkeypatch.setenv("WHATSAPP_FROM_NUMBER", "+67890")
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "67890")
+    monkeypatch.setenv("FACEBOOK_PAGE_ACCESS_TOKEN", "token456")
+    monkeypatch.setenv("FACEBOOK_APP_SECRET", "othersecret")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "verify-token-2")
     monkeypatch.setenv("WEBHOOK_BASE_URL", "https://example.org")
-    monkeypatch.setenv("WHATSAPP_WEBHOOK_SECRET", "secret456")
+    monkeypatch.setenv("DEFAULT_TEMPLATE_NAME", "session_expired")
+    monkeypatch.setenv("TEMPLATE_MAPPING", '{"default":"session_expired"}')
 
     settings_one = Settings()
     settings_one.admin_allowed_origins.append("https://allowed.test")
@@ -52,11 +58,13 @@ def test_settings_reload_uses_cached_env(tmp_path, monkeypatch):
         textwrap.dedent(
             """
             OPENAI_API_KEY=file-key
-            WHATSAPP_ACCOUNT_SID=ACFILE
-            WHATSAPP_AUTH_TOKEN=file-token
-            WHATSAPP_FROM_NUMBER=+1999
+            WHATSAPP_PHONE_NUMBER_ID=9999
+            FACEBOOK_PAGE_ACCESS_TOKEN=file-token
+            FACEBOOK_APP_SECRET=file-secret
+            WHATSAPP_WEBHOOK_VERIFY_TOKEN=file-verify
             WEBHOOK_BASE_URL=https://file.test
-            WHATSAPP_WEBHOOK_SECRET=file-secret
+            DEFAULT_TEMPLATE_NAME=session_expired
+            TEMPLATE_MAPPING={"handoff":"handoff_notification"}
             """
         ).strip()
         + "\n"
@@ -64,11 +72,13 @@ def test_settings_reload_uses_cached_env(tmp_path, monkeypatch):
 
     for key in (
         "OPENAI_API_KEY",
-        "WHATSAPP_ACCOUNT_SID",
-        "WHATSAPP_AUTH_TOKEN",
-        "WHATSAPP_FROM_NUMBER",
+        "WHATSAPP_PHONE_NUMBER_ID",
+        "FACEBOOK_PAGE_ACCESS_TOKEN",
+        "FACEBOOK_APP_SECRET",
+        "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
         "WEBHOOK_BASE_URL",
-        "WHATSAPP_WEBHOOK_SECRET",
+        "DEFAULT_TEMPLATE_NAME",
+        "TEMPLATE_MAPPING",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -79,10 +89,12 @@ def test_settings_reload_uses_cached_env(tmp_path, monkeypatch):
     settings = module.Settings()
 
     assert settings.openai_api_key == "file-key"
-    assert settings.whatsapp_account_sid == "ACFILE"
-    assert settings.whatsapp_auth_token == "file-token"
-    assert settings.whatsapp_from_number == "+1999"
+    assert settings.whatsapp_phone_number_id == "9999"
+    assert settings.facebook_page_access_token == "file-token"
+    assert settings.facebook_app_secret == "file-secret"
     assert str(settings.webhook_base_url) == "https://file.test/"
-    assert settings.webhook_secret == "file-secret"
+    assert settings.whatsapp_webhook_verify_token == "file-verify"
+    assert settings.default_template_name == "session_expired"
+    assert settings.template_mapping["handoff"] == "handoff_notification"
 
     importlib.reload(module)

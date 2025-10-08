@@ -49,7 +49,7 @@ def add_document(
 
 
 @router.post("/handoff/to-human")
-def handoff_to_human(
+async def handoff_to_human(
     conversation_id: int,
     db: InMemorySession = Depends(get_db),
     whatsapp_service: WhatsAppService = Depends(get_whatsapp_service),
@@ -65,12 +65,12 @@ def handoff_to_human(
         whatsapp_service=whatsapp_service,
         session=db,
     )
-    escalation = agent.pass_control_to_human(conversation=conversation, metadata={"trigger": "admin_manual"})
+    escalation = await agent.pass_control_to_human(conversation=conversation, metadata={"trigger": "admin_manual"})
     return {"escalation_id": escalation.id}
 
 
 @router.post("/handoff/to-bot")
-def handoff_to_bot(
+async def handoff_to_bot(
     conversation_id: int,
     db: InMemorySession = Depends(get_db),
     whatsapp_service: WhatsAppService = Depends(get_whatsapp_service),
@@ -86,7 +86,7 @@ def handoff_to_bot(
         whatsapp_service=whatsapp_service,
         session=db,
     )
-    agent.take_control_back(conversation=conversation, metadata={"trigger": "admin_manual"})
+    await agent.take_control_back(conversation=conversation, metadata={"trigger": "admin_manual"})
     return {"status": "ok"}
 
 

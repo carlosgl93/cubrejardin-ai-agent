@@ -21,7 +21,7 @@ class GuardianResult(BaseModel):
     category: str
     confidence: float
     intent: str
-    entities: Dict[str, Any]
+    entities: Dict[str, Any] = Field(default_factory=dict)
     sentiment: str
     reason: str
 
@@ -33,6 +33,15 @@ class RAGResponse(BaseModel):
     confidence: float
     sources: List[Dict[str, Any]]
     disclaimer: Optional[str]
+
+
+class AgentResponse(BaseModel):
+    """Structured response returned by the orchestrator."""
+
+    message: str
+    intent: Optional[str] = None
+    category: Optional[str] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
 
 
 class EscalationSummary(BaseModel):

@@ -29,6 +29,7 @@ class Conversation(BaseModel):
     role: str = ""
     message: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+    last_interaction_at: Optional[datetime] = None
 
 
 @dataclass

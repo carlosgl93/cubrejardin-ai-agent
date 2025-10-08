@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Optional
 
 from models.database import Conversation, Escalation, InMemorySession
@@ -27,7 +28,7 @@ class HandoffAgent:
         self.session = session
         self.learning_service = learning_service or LearningService(session)
 
-    def pass_control_to_human(
+    async def pass_control_to_human(
         self,
         *,
         conversation: Conversation,
@@ -35,16 +36,20 @@ class HandoffAgent:
     ) -> Escalation:
         """Trigger WhatsApp handover protocol to a human agent."""
 
-        escalation = Escalation(
-            conversation_id=conversation.id,
-            status="pending",
-            handoff_type="to_human",
-            metadata=metadata or {},
-        )
-        self.session.add(escalation)
-        self.session.commit()
+        def _persist() -> Escalation:
+            escalation = Escalation(
+                conversation_id=conversation.id,
+                status="pending",
+                handoff_type="to_human",
+                metadata=metadata or {},
+            )
+            self.session.add(escalation)
+            self.session.commit()
+            return escalation
+
+        escalation = await asyncio.to_thread(_persist)
         try:
-            self.whatsapp_service.pass_thread_control(
+            await self.whatsapp_service.pass_thread_control(
                 recipient_id=conversation.user_number,
                 metadata=metadata or {},
             )
@@ -60,7 +65,7 @@ class HandoffAgent:
         )
         return escalation
 
-    def take_control_back(
+    async def take_control_back(
         self,
         *,
         conversation: Conversation,
@@ -69,7 +74,7 @@ class HandoffAgent:
         """Recover WhatsApp thread control for the bot."""
 
         try:
-            self.whatsapp_service.take_thread_control(
+            await self.whatsapp_service.take_thread_control(
                 recipient_id=conversation.user_number,
                 metadata=metadata or {},
             )
@@ -79,19 +84,23 @@ class HandoffAgent:
                 extra={"conversation_id": conversation.id, "error": str(exc)},
             )
             raise
-        for escalation in reversed(self.session.query(Escalation)):
-            if escalation.conversation_id == conversation.id and escalation.status != "resolved":
-                escalation.status = "resolved"
-                escalation.handoff_type = "to_bot"
-                escalation.metadata.update(metadata or {})
-                break
-        self.session.commit()
+
+        def _resolve() -> None:
+            for escalation in reversed(self.session.query(Escalation)):
+                if escalation.conversation_id == conversation.id and escalation.status != "resolved":
+                    escalation.status = "resolved"
+                    escalation.handoff_type = "to_bot"
+                    escalation.metadata.update(metadata or {})
+                    break
+            self.session.commit()
+
+        await asyncio.to_thread(_resolve)
         logger.info(
             "handoff_take_control_success",
             extra={"conversation_id": conversation.id},
         )
 
-    def record_human_response(
+    async def record_human_response(
         self,
         *,
         conversation: Conversation,
@@ -101,18 +110,21 @@ class HandoffAgent:
     ) -> None:
         """Persist a human response into the learning queue."""
 
-        entry = self.learning_service.queue_human_response(
-            conversation_id=conversation.id,
-            user_message=user_message,
-            human_answer=human_answer,
-            metadata=metadata,
-        )
+        def _queue() -> Any:
+            return self.learning_service.queue_human_response(
+                conversation_id=conversation.id,
+                user_message=user_message,
+                human_answer=human_answer,
+                metadata=metadata,
+            )
+
+        entry = await asyncio.to_thread(_queue)
         logger.info(
             "handoff_human_response_recorded",
             extra={"conversation_id": conversation.id, "entry_id": entry.id},
         )
 
-    def escalate(
+    async def escalate(
         self,
         conversation: Conversation,
         user_number: str,
@@ -121,9 +133,9 @@ class HandoffAgent:
         """Escalate conversation and notify user."""
 
         details = metadata or {"reason": "low_confidence"}
-        self.pass_control_to_human(conversation=conversation, metadata=details)
         message = (
             "Gracias por tu paciencia. Un especialista humano revisará tu caso y te contactará en menos de 2 horas."
         )
-        self.whatsapp_service.send_message(user_number, message)
+        await self.whatsapp_service.send_text_message(user_number, message)
+        await self.pass_control_to_human(conversation=conversation, metadata=details)
         return message

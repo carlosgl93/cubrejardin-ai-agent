@@ -5,13 +5,11 @@ services:
     depends_on:
       - db
       - redis
+    env_file:
+      - .env
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - WHATSAPP_ACCOUNT_SID=${WHATSAPP_ACCOUNT_SID}
-      - WHATSAPP_AUTH_TOKEN=${WHATSAPP_AUTH_TOKEN}
-      - WHATSAPP_FROM_NUMBER=${WHATSAPP_FROM_NUMBER}
-      - WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL}
-      - WHATSAPP_WEBHOOK_SECRET=${WHATSAPP_WEBHOOK_SECRET}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/whatsapp}
     ports:
       - "8000:8000"
     volumes:

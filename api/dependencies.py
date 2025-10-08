@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Generator
+from typing import AsyncGenerator, Generator
 
 from fastapi import Depends
 
@@ -11,6 +11,7 @@ from models.database import SessionLocal
 from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
 from services.whatsapp_service import WhatsAppService
+from services.template_service import TemplateService
 
 
 def get_db() -> Generator:
@@ -35,10 +36,14 @@ def get_vector_store() -> VectorStoreService:
     return VectorStoreService()
 
 
-def get_whatsapp_service() -> WhatsAppService:
-    """Provide WhatsApp service."""
+async def get_whatsapp_service() -> AsyncGenerator[WhatsAppService, None]:
+    """Provide WhatsApp service and ensure cleanup."""
 
-    return WhatsAppService()
+    service = WhatsAppService()
+    try:
+        yield service
+    finally:
+        await service.close()
 
 
 def get_orchestrator(
@@ -54,4 +59,5 @@ def get_orchestrator(
         openai_service=openai_service,
         vector_store=vector_store,
         whatsapp_service=whatsapp_service,
+        template_service=TemplateService(whatsapp_service=whatsapp_service),
     )

@@ -35,4 +35,9 @@ class GuardianAgent:
         )
         content = response["choices"][0]["message"]["content"]
         data: Dict[str, Any] = json.loads(content)
+
+        # 🔧 Normalizar entities
+        if "entities" in data and isinstance(data["entities"], list):
+            data["entities"] = {}
+
         return GuardianResult(**data)

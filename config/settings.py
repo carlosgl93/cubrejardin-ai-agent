@@ -1,7 +1,7 @@
 """Application settings module."""
 
 from functools import lru_cache
-from typing import List
+from typing import Dict, List
 
 from pydantic import Field
 from pydantic.networks import HttpUrl
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     app_name: str = "WhatsApp AI Agent"
     environment: str = "development"
-    debug: bool = False
+    debug: bool = Field(False, validation_alias="DEBUG")
 
     # 🔑 OpenAI
     openai_api_key: str = Field(..., validation_alias="OPENAI_API_KEY")
@@ -34,16 +34,24 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
 
     # 📱 WhatsApp / Meta
-    whatsapp_account_sid: str = Field(..., validation_alias="WHATSAPP_ACCOUNT_SID")
-    whatsapp_auth_token: str = Field(..., validation_alias="WHATSAPP_AUTH_TOKEN")
-    whatsapp_from_number: str = Field(..., validation_alias="WHATSAPP_FROM_NUMBER")
-    whatsapp_phone_number_id: str = Field("000000000000000", validation_alias="WHATSAPP_PHONE_NUMBER_ID")
-    facebook_page_access_token: str = Field("test-token", validation_alias="FACEBOOK_PAGE_ACCESS_TOKEN")
+    whatsapp_phone_number_id: str = Field(..., validation_alias="WHATSAPP_PHONE_NUMBER_ID")
+    facebook_page_access_token: str = Field(..., validation_alias="FACEBOOK_PAGE_ACCESS_TOKEN")
+    facebook_app_secret: str = Field(..., validation_alias="FACEBOOK_APP_SECRET")
     facebook_target_app_id: str = Field("263902037430900", validation_alias="FACEBOOK_TARGET_APP_ID")
+    whatsapp_webhook_verify_token: str = Field(..., validation_alias="WHATSAPP_WEBHOOK_VERIFY_TOKEN")
+    default_template_name: str = Field(
+        "session_expired", validation_alias="DEFAULT_TEMPLATE_NAME"
+    )
+    template_mapping: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "handoff": "handoff_notification",
+            "session_expired": "session_expired",
+        },
+        validation_alias="TEMPLATE_MAPPING",
+    )
 
     # 🌐 Webhook
     webhook_base_url: HttpUrl = Field(..., validation_alias="WEBHOOK_BASE_URL")
-    webhook_secret: str = Field(..., validation_alias="WHATSAPP_WEBHOOK_SECRET")
 
     # 📚 Vector store
     vector_store_path: str = "data/vector_store/index.faiss"
