@@ -11,12 +11,14 @@ from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
 from services.whatsapp_service import WhatsAppService
 from services.template_service import TemplateService
+from services.mercadofiel_service import MercadoFielService
 from utils import logger
 from utils.helpers import sanitize_text
 
 from .guardian_agent import GuardianAgent
 from .handoff_agent import HandoffAgent
 from .rag_agent import RAGAgent
+from .stock_agent import StockAgent
 
 
 class AgentOrchestrator:
@@ -30,14 +32,17 @@ class AgentOrchestrator:
         vector_store: VectorStoreService,
         whatsapp_service: WhatsAppService,
         template_service: TemplateService,
+        mercadofiel_service: Optional[MercadoFielService] = None,
     ) -> None:
         self.session = session
         self.openai_service = openai_service
         self.vector_store = vector_store
         self.whatsapp_service = whatsapp_service
         self.template_service = template_service
+        self.mercadofiel_service = mercadofiel_service or MercadoFielService()
         self.guardian = GuardianAgent(openai_service)
         self.rag = RAGAgent(openai_service, vector_store)
+        self.stock = StockAgent(openai_service)
         self.handoff = HandoffAgent(
             openai_service=openai_service,
             whatsapp_service=whatsapp_service,
@@ -113,6 +118,136 @@ class AgentOrchestrator:
                 intent=guardian_result.intent,
                 category=guardian_result.category,
                 data={"guardian": guardian_result.model_dump()},
+            )
+
+        # Handle stock operations
+        if guardian_result.category == "STOCK_OPERATION":
+            logger.info("stock_operation_detected", extra={"user": user_number, "text": cleaned})
+            
+            # Try quick regex parse first
+            quick_result = self.stock.quick_parse(cleaned)
+            if quick_result:
+                stock_op = quick_result
+            else:
+                # Fall back to AI parsing
+                stock_op_result = await asyncio.to_thread(self.stock.parse_stock_command, cleaned)
+                stock_op = stock_op_result.model_dump()
+            
+            # Extract parsed data
+            action = stock_op.get("action")
+            product_id = stock_op.get("product_id")
+            quantity = stock_op.get("quantity")
+            
+            # Validate we have required data
+            if not product_id:
+                response_message = "❌ No pude identificar el producto. Usa formato: entrada 123 50"
+                await self._store_message(user_number, "assistant", response_message)
+                return AgentResponse(
+                    message=response_message,
+                    intent="stock_operation_error",
+                    category="STOCK_OPERATION",
+                    data={"error": "missing_product_id"}
+                )
+            
+            # Execute appropriate API call based on action
+            if action == "STOCK_ADD":
+                if not quantity:
+                    response_message = "❌ Falta la cantidad. Usa formato: entrada 123 50"
+                    await self._store_message(user_number, "assistant", response_message)
+                    return AgentResponse(message=response_message, intent="stock_operation_error", category="STOCK_OPERATION")
+                
+                api_result = await self.mercadofiel_service.add_stock(
+                    product_id=product_id,
+                    quantity=quantity,
+                    phone_number=user_number,
+                    notes=f"Mensaje original: {cleaned}"
+                )
+            
+            elif action == "STOCK_REMOVE":
+                if not quantity:
+                    response_message = "❌ Falta la cantidad. Usa formato: salida 123 30"
+                    await self._store_message(user_number, "assistant", response_message)
+                    return AgentResponse(message=response_message, intent="stock_operation_error", category="STOCK_OPERATION")
+                
+                api_result = await self.mercadofiel_service.remove_stock(
+                    product_id=product_id,
+                    quantity=quantity,
+                    phone_number=user_number,
+                    is_sale=False,
+                    notes=f"Mensaje original: {cleaned}"
+                )
+            
+            elif action == "STOCK_SALE":
+                if not quantity:
+                    response_message = "❌ Falta la cantidad. Usa formato: venta 123 5"
+                    await self._store_message(user_number, "assistant", response_message)
+                    return AgentResponse(message=response_message, intent="stock_operation_error", category="STOCK_OPERATION")
+                
+                api_result = await self.mercadofiel_service.remove_stock(
+                    product_id=product_id,
+                    quantity=quantity,
+                    phone_number=user_number,
+                    is_sale=True,
+                    notes=f"Venta registrada. Mensaje original: {cleaned}"
+                )
+            
+            elif action == "STOCK_QUERY":
+                api_result = await self.mercadofiel_service.query_stock(product_id)
+            
+            elif action == "STOCK_SET":
+                if not quantity:
+                    response_message = "❌ Falta la cantidad. Usa formato: set 123 100"
+                    await self._store_message(user_number, "assistant", response_message)
+                    return AgentResponse(message=response_message, intent="stock_operation_error", category="STOCK_OPERATION")
+                
+                api_result = await self.mercadofiel_service.set_stock(
+                    product_id=product_id,
+                    new_quantity=quantity,
+                    phone_number=user_number,
+                    notes=f"Mensaje original: {cleaned}"
+                )
+            
+            else:
+                # Unknown action
+                response_message = (
+                    "❌ No pude entender el comando de stock.\n\n"
+                    "Comandos disponibles:\n"
+                    "• entrada 123 50 - Agregar stock\n"
+                    "• salida 123 30 - Quitar stock\n"
+                    "• venta 123 5 - Registrar venta\n"
+                    "• stock 123 - Consultar stock\n"
+                    "• set 123 100 - Establecer stock"
+                )
+                await self._store_message(user_number, "assistant", response_message)
+                return AgentResponse(
+                    message=response_message,
+                    intent="stock_operation_error",
+                    category="STOCK_OPERATION",
+                    data={"error": "unknown_action", "parsed_action": action}
+                )
+            
+            # Get message from API result
+            response_message = api_result.get("message", "Operación completada")
+            
+            await self._store_message(
+                user_number,
+                "assistant",
+                response_message,
+                {
+                    "stock_operation": stock_op,
+                    "api_result": api_result
+                }
+            )
+            
+            return AgentResponse(
+                message=response_message,
+                intent="stock_operation",
+                category="STOCK_OPERATION",
+                data={
+                    "guardian": guardian_result.model_dump(),
+                    "stock": stock_op,
+                    "result": api_result
+                },
             )
 
         rag_response: RAGResponse = await asyncio.to_thread(self.rag.answer, cleaned)

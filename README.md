@@ -1,6 +1,18 @@
 # WhatsApp AI Agent
 
-Multi‑agente construido sobre FastAPI para responder conversaciones de WhatsApp utilizando la **Meta WhatsApp Cloud API**. La solución combina guardrails, recuperación aumentada (RAG), escalaciones controladas y fallbacks automáticos con plantillas aprobadas.
+Multi‑agente construido sobre FastAPI para responder conversaciones de WhatsApp utilizando la **Meta WhatsApp Cloud API**. La solución combina guardr## Pruebas Recomendadas
+
+1. **Saludo**: "Hola agente" → categoría `GREETING`.
+2. **RAG**: "¿Cuál es el catálogo de productos?" → obtiene los planes desde FAISS (confianza logueada).
+3. **Stock Add**: "entrada 123 50" → agrega 50 unidades al producto 123 vía Mercado Fiel.
+4. **Stock Query**: "stock 123" → consulta el inventario actual del producto 123.
+5. **Stock Sale**: "venta 123 5" → registra venta de 5 unidades del producto 123.
+6. **Sensibles**: "Realízame una transferencia" → categoría `SENSITIVE`, sin escalado.
+7. **Spam**: "asdfasdf" → categoría `SPAM`.
+8. **Escalación**: "Necesito hablar con un humano" → disparará `handoff_notification` y `pass_thread_control`.
+9. **Fuera de ventana**: reenvía el mismo mensaje después de 24 h (o fuerza el estado) → se envía plantilla `session_expired`.
+
+Consulta el documento [docs/STOCK_MANAGEMENT.md](docs/STOCK_MANAGEMENT.md) para más detalles sobre la gestión de inventario.cuperación aumentada (RAG), escalaciones controladas y fallbacks automáticos con plantillas aprobadas.
 
 ---
 
@@ -11,12 +23,15 @@ flowchart TD
     A[Webhook Meta Cloud API] -->|Mensaje entrante| B[Agente Guardian]
     B -->|SPAM/SENSITIVE/OFF_TOPIC| C[Respuesta automática]
     B -->|ESCALATION_REQUEST| H[Agente Handoff]
+    B -->|STOCK_OPERATION| S[Agente Stock]
     B -->|VALID_QUERY/GREETING| D[Agente RAG]
     D -->|Consulta Vector Store| E[FAISS]
     D -->|Consultas DB| F[(PostgreSQL)]
+    S -->|Operación Stock| MF[Mercado Fiel API]
+    MF -->|Resultado| J[Meta WhatsApp]
     H -->|Notificación| I[(Ticketing Webhook)]
     D -->|Confianza Baja| H
-    H -->|Confirmación usuario| J[Meta WhatsApp]
+    H -->|Confirmación usuario| J
     D -->|Respuesta| J
     subgraph Aprendizaje Incremental
         K[Agente Humano] --> L[Learning Queue]
@@ -25,6 +40,18 @@ flowchart TD
         M -->|Registro| F
     end
 ```
+
+### Componentes Clave
+
+- **Webhook Meta** (`api/webhooks.py`): valida firma `X-Hub-Signature-256`, idempotencia por `message_id`, marca mensajes como leídos y delega al orquestador.
+- **Agente Guardian** (`agents/guardian_agent.py`): clasifica mensajes (VALID_QUERY, SPAM, SENSITIVE, STOCK_OPERATION, etc.) aplicando reglas explícitas.
+- **Agente Stock** (`agents/stock_agent.py`): parsea comandos de inventario (entrada, salida, venta, consulta) y ejecuta operaciones vía Mercado Fiel API.
+- **Agente RAG** (`agents/rag_agent.py`): recupera contexto desde FAISS y responde. Loguea confianza (`rag_answer`) y fuentes.
+- **Agente Handoff** (`agents/handoff_agent.py`): notifica al usuario, envía plantilla y ejecuta `pass_thread_control` cuando corresponde.
+- **MercadoFielService** (`services/mercadofiel_service.py`): cliente HTTP para integración con API de gestión de inventario.
+- **TemplateService** (`services/template_service.py`): fallback automático fuera de la ventana de 24 h usando plantillas aprobadas (`session_expired`, `handoff_notification`, etc.).
+- **WhatsAppService** (`services/whatsapp_service.py`): cliente async para la Cloud API v21.0 con backoff, validación SHA-256 y tracking de la última interacción.
+- **Persistencia**: Postgres (SQLAlchemy/InMemory) para conversaciones y cola de aprendizaje, FAISS para embeddings, Redis para futuros workers (cola de mensajes).
 
 ### Componentes Clave
 - **Webhook Meta** (`api/webhooks.py`): valida firma `X-Hub-Signature-256`, idempotencia por `message_id`, marca mensajes como leídos y delega al orquestador.
@@ -61,6 +88,8 @@ Configura `.env` a partir de `.env.example`.
 | `DEFAULT_TEMPLATE_NAME` | Plantilla por defecto para fuera de ventana (ej. `session_expired`) |
 | `TEMPLATE_MAPPING` | JSON con mapeos `intención → plantilla` (ej. `{ "handoff": "handoff_notification" }`) |
 | `WEBHOOK_BASE_URL` | URL pública (ngrok / dominio) |
+| `MERCADO_FIEL_API_URL` | URL base de la API de Mercado Fiel (para gestión de stock) |
+| `MERCADO_FIEL_API_KEY` | Token de autenticación para Mercado Fiel API |
 | `DATABASE_URL` | (Docker Compose) URL para Postgres |
 | `REDIS_URL` | (Docker Compose) URL para Redis |
 

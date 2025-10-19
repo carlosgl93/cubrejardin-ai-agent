@@ -92,7 +92,9 @@ async def whatsapp_webhook(
     """Handle WhatsApp webhook callbacks from Meta."""
 
     raw_body = await request.body()
-    if not settings.debug:
+    
+    # Skip signature validation if explicitly disabled (for local testing with Meta dashboard)
+    if not settings.skip_webhook_signature_validation:
         if not whatsapp_service.validate_webhook_signature(raw_body, x_hub_signature_256):
             logger.warning("whatsapp_invalid_signature")
             raise HTTPException(status_code=403, detail="Invalid signature")
@@ -117,7 +119,16 @@ async def whatsapp_webhook(
                         extra={"from": user_number, "message_id": msg.id},
                     )
                     whatsapp_service.record_incoming_interaction(user_number, timestamp=_parse_meta_timestamp(msg.timestamp))
-                    await whatsapp_service.mark_as_read(msg.id)
+                    
+                    # Try to mark as read, but don't fail if it doesn't work (e.g., test messages)
+                    try:
+                        await whatsapp_service.mark_as_read(msg.id)
+                    except Exception as mark_read_error:
+                        logger.warning(
+                            "whatsapp_mark_read_failed",
+                            extra={"message_id": msg.id, "error": str(mark_read_error)}
+                        )
+                    
                     agent_response = await orchestrator.process_message(user_number, body_text, message_id=msg.id)
                     try:
                         await whatsapp_service.send_text_message(user_number, agent_response.message)

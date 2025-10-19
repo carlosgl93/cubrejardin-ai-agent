@@ -60,3 +60,12 @@ class LearningQueueItem(BaseModel):
     answer: str
     metadata: Dict[str, Any]
     created_at: datetime
+
+
+class StockOperation(BaseModel):
+    """Parsed stock operation from user message."""
+
+    action: str  # STOCK_ADD, STOCK_REMOVE, STOCK_QUERY, STOCK_SALE, STOCK_SET, UNKNOWN
+    product_id: Optional[int] = None
+    quantity: Optional[int] = None
+    confidence: float = 0.0
