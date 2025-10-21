@@ -137,16 +137,43 @@ class AgentOrchestrator:
             action = stock_op.get("action")
             product_id = stock_op.get("product_id")
             quantity = stock_op.get("quantity")
+            page = stock_op.get("page", 1)
+            search_term = stock_op.get("search_term")
             
-            # Validate we have required data
-            if not product_id:
-                response_message = "❌ No pude identificar el producto. Usa formato: entrada 123 50"
-                await self._store_message(user_number, "assistant", response_message)
+            # Actions that don't require product_id
+            actions_without_product_id = ["STOCK_ALERTS", "PRODUCT_LIST"]
+            
+            # Validate we have required data (except for actions that don't need product_id)
+            if not product_id and action not in actions_without_product_id:
+                # Generate helpful error message with all available commands
+                available_commands = (
+                    "❌ No identifiqué el comando correctamente.\n\n"
+                    "📋 *Comandos Disponibles:*\n\n"
+                    "*Agregar Stock:*\n"
+                    "• entrada 123 50\n"
+                    "• +3 100\n"
+                    "• agregar 20 del producto 456\n\n"
+                    "*Ventas:*\n"
+                    "• venta 123 5\n"
+                    "• vendi 10 del producto 3\n"
+                    "• -3 50 (quitar stock)\n\n"
+                    "*Consultas:*\n"
+                    "• stock 123\n"
+                    "• ?3\n"
+                    "• cuanto stock tiene el 456\n\n"
+                    "*Gestión:*\n"
+                    "• set 123 100 (establecer stock)\n"
+                    "• historial 123\n"
+                    "• alertas\n"
+                    "• productos (listar tus productos)\n"
+                    "• buscar tomates"
+                )
+                await self._store_message(user_number, "assistant", available_commands)
                 return AgentResponse(
-                    message=response_message,
-                    intent="stock_operation_error",
+                    message=available_commands,
+                    intent="stock_operation_help",
                     category="STOCK_OPERATION",
-                    data={"error": "missing_product_id"}
+                    data={"error": "missing_product_id", "action": action}
                 )
             
             # Execute appropriate API call based on action
@@ -192,7 +219,31 @@ class AgentOrchestrator:
                 )
             
             elif action == "STOCK_QUERY":
-                api_result = await self.mercadofiel_service.query_stock(product_id)
+                api_result = await self.mercadofiel_service.query_stock(product_id, phone_number=user_number)
+            
+            elif action == "STOCK_HISTORY":
+                api_result = await self.mercadofiel_service.get_history(product_id, phone_number=user_number, limit=10)
+            
+            elif action == "STOCK_ALERTS":
+                api_result = await self.mercadofiel_service.get_alerts(phone_number=user_number, resolved=False)
+            
+            elif action == "PRODUCT_LIST":
+                page = stock_op.get("page", 1)
+                search_term = stock_op.get("search_term")
+                
+                logger.info("product_list_request", extra={
+                    "phone_number": user_number,
+                    "page": page,
+                    "search_term": search_term,
+                    "text": "Requesting product list for supplier"
+                })
+                
+                api_result = await self.mercadofiel_service.get_products(
+                    phone_number=user_number,
+                    page=page,
+                    limit=10,
+                    search=search_term
+                )
             
             elif action == "STOCK_SET":
                 if not quantity:
@@ -210,13 +261,26 @@ class AgentOrchestrator:
             else:
                 # Unknown action
                 response_message = (
-                    "❌ No pude entender el comando de stock.\n\n"
-                    "Comandos disponibles:\n"
-                    "• entrada 123 50 - Agregar stock\n"
-                    "• salida 123 30 - Quitar stock\n"
-                    "• venta 123 5 - Registrar venta\n"
-                    "• stock 123 - Consultar stock\n"
-                    "• set 123 100 - Establecer stock"
+                    "❌ No identifiqué el comando correctamente.\n\n"
+                    "📋 *Comandos Disponibles:*\n\n"
+                    "*Agregar Stock:*\n"
+                    "• entrada 123 50\n"
+                    "• +3 100\n"
+                    "• agregar 20 del producto 456\n\n"
+                    "*Ventas:*\n"
+                    "• venta 123 5\n"
+                    "• vendi 10 del producto 3\n"
+                    "• -3 50 (quitar stock)\n\n"
+                    "*Consultas:*\n"
+                    "• stock 123\n"
+                    "• ?3\n"
+                    "• cuanto stock tiene el 456\n\n"
+                    "*Gestión:*\n"
+                    "• set 123 100 (establecer stock)\n"
+                    "• historial 123\n"
+                    "• alertas\n"
+                    "• productos (listar tus productos)\n"
+                    "• buscar tomates"
                 )
                 await self._store_message(user_number, "assistant", response_message)
                 return AgentResponse(

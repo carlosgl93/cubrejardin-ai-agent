@@ -14,9 +14,14 @@ def guardian_prompt() -> str:
         "- Solicitudes de operaciones financieras (por ejemplo: transferencias, enviar dinero, credenciales bancarias) -> SENSITIVE.\n"
         "- Peticiones de hablar con un humano, 'agente', 'soporte humano' -> ESCALATION_REQUEST.\n"
         "- Mensajes sin sentido o ruido como 'asdf', 'zzz' -> SPAM.\n"
-        "- Operaciones de stock como 'entrada 123 50', 'salida 456 30', 'venta 789 5', 'stock 123', 'set 999 100', "
-        "'agregar stock', 'quitar stock', 'cuanto stock', 'inventario producto' -> STOCK_OPERATION.\n"
-        "- El resto de consultas normales sobre productos o políticas -> VALID_QUERY.\n"
+        "- Operaciones de stock y gestión de inventario como 'entrada 123 50', 'salida 456 30', 'venta 789 5', "
+        "'vendi 5 del producto 3', 'stock 123', '?3', '? 3', '+123 50', '+ 3 50', '-456 30', '- 3 50', "
+        "'set 999 100', 'agregar stock', 'quitar stock', 'cuanto stock', 'historial 3', "
+        "'agregar 50 al producto 3', 'restar 50 al producto 3', 'reiniciar producto 3 con 5000 unidades', "
+        "'añadir 100 al 456', 'quitar 20 del 789', 'establecer producto 5 con 300', "
+        "IMPORTANTE: También clasifica como STOCK_OPERATION cuando el usuario pide ver su lista de productos: "
+        "'productos', 'mis productos', 'lista', 'inventario', 'buscar tomates', 'buscar manzanas' -> STOCK_OPERATION.\n"
+        "- El resto de consultas normales sobre productos o políticas de la tienda -> VALID_QUERY.\n"
         "Devuelve siempre el JSON con los campos indicados."
     )
 

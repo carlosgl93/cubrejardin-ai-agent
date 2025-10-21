@@ -65,7 +65,9 @@ class LearningQueueItem(BaseModel):
 class StockOperation(BaseModel):
     """Parsed stock operation from user message."""
 
-    action: str  # STOCK_ADD, STOCK_REMOVE, STOCK_QUERY, STOCK_SALE, STOCK_SET, UNKNOWN
+    action: str  # STOCK_ADD, STOCK_REMOVE, STOCK_QUERY, STOCK_SALE, STOCK_SET, STOCK_HISTORY, STOCK_ALERTS, PRODUCT_LIST, UNKNOWN
     product_id: Optional[int] = None
     quantity: Optional[int] = None
+    page: Optional[int] = None  # For pagination in PRODUCT_LIST
+    search_term: Optional[str] = None  # For search in PRODUCT_LIST
     confidence: float = 0.0

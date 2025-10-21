@@ -116,7 +116,13 @@ async def whatsapp_webhook(
                         continue
                     logger.info(
                         "whatsapp_message_received",
-                        extra={"from": user_number, "message_id": msg.id},
+                        extra={
+                            "from": user_number,
+                            "phone_number": user_number,
+                            "message_id": msg.id,
+                            "message_text": body_text[:100],  # Log first 100 chars
+                            "text": f"Message received from {user_number}"
+                        },
                     )
                     whatsapp_service.record_incoming_interaction(user_number, timestamp=_parse_meta_timestamp(msg.timestamp))
                     
