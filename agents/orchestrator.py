@@ -18,7 +18,7 @@ from utils.helpers import sanitize_text
 from .guardian_agent import GuardianAgent
 from .handoff_agent import HandoffAgent
 from .rag_agent import RAGAgent
-from .stock_agent import StockAgent
+from .faq_agent import FAQAgent
 
 
 class AgentOrchestrator:
@@ -42,7 +42,7 @@ class AgentOrchestrator:
         self.mercadofiel_service = mercadofiel_service or MercadoFielService()
         self.guardian = GuardianAgent(openai_service)
         self.rag = RAGAgent(openai_service, vector_store)
-        self.stock = StockAgent(openai_service)
+        self.faq = FAQAgent(openai_service)
         self.handoff = HandoffAgent(
             openai_service=openai_service,
             whatsapp_service=whatsapp_service,
@@ -87,6 +87,7 @@ class AgentOrchestrator:
             user_metadata["message_id"] = message_id
         await self._store_message(user_number, "user", cleaned, user_metadata)
         logger.info("guardian_classification", extra=guardian_result.model_dump())
+        logger.info("guardian result", extra={"result": guardian_result})
 
         if guardian_result.category in {"SPAM", "SENSITIVE", "OFF_TOPIC"}:
             response = (
@@ -120,200 +121,87 @@ class AgentOrchestrator:
                 data={"guardian": guardian_result.model_dump()},
             )
 
-        # Handle stock operations
-        if guardian_result.category == "STOCK_OPERATION":
-            logger.info("stock_operation_detected", extra={"user": user_number, "text": cleaned})
+        # First, try to identify if it's an FAQ question
+        faq_intent = await asyncio.to_thread(self.faq.identify_faq_intent, cleaned)
+        logger.info(
+            "faq_intent_check",
+            extra={
+                "user": user_number,
+                "category": faq_intent.get("category"),
+                "confidence": faq_intent.get("confidence"),
+            },
+        )
+
+        # If FAQ agent has high confidence (>=0.7) and it's a known FAQ category, use FAQ agent
+        if faq_intent.get("confidence", 0) >= 0.7 and faq_intent.get("category") != "NOT_FAQ":
+            # Get vector store context directly (without RAG's low confidence check)
+            embedding_response = self.openai_service.embed(input_texts=[cleaned])
+            embedding = embedding_response["data"][0]["embedding"]
+            search_results = self.vector_store.search(embedding, top_k=3)
             
-            # Try quick regex parse first
-            quick_result = self.stock.quick_parse(cleaned)
-            if quick_result:
-                stock_op = quick_result
-            else:
-                # Fall back to AI parsing
-                stock_op_result = await asyncio.to_thread(self.stock.parse_stock_command, cleaned)
-                stock_op = stock_op_result.model_dump()
-            
-            # Extract parsed data
-            action = stock_op.get("action")
-            product_id = stock_op.get("product_id")
-            quantity = stock_op.get("quantity")
-            page = stock_op.get("page", 1)
-            search_term = stock_op.get("search_term")
-            
-            # Actions that don't require product_id
-            actions_without_product_id = ["STOCK_ALERTS", "PRODUCT_LIST"]
-            
-            # Validate we have required data (except for actions that don't need product_id)
-            if not product_id and action not in actions_without_product_id:
-                # Generate helpful error message with all available commands
-                available_commands = (
-                    "❌ No identifiqué el comando correctamente.\n\n"
-                    "📋 *Comandos Disponibles:*\n\n"
-                    "*Agregar Stock:*\n"
-                    "• entrada 123 50\n"
-                    "• +3 100\n"
-                    "• agregar 20 del producto 456\n\n"
-                    "*Ventas:*\n"
-                    "• venta 123 5\n"
-                    "• vendi 10 del producto 3\n"
-                    "• -3 50 (quitar stock)\n\n"
-                    "*Consultas:*\n"
-                    "• stock 123\n"
-                    "• ?3\n"
-                    "• cuanto stock tiene el 456\n\n"
-                    "*Gestión:*\n"
-                    "• set 123 100 (establecer stock)\n"
-                    "• historial 123\n"
-                    "• alertas\n"
-                    "• productos (listar tus productos)\n"
-                    "• buscar tomates"
-                )
-                await self._store_message(user_number, "assistant", available_commands)
-                return AgentResponse(
-                    message=available_commands,
-                    intent="stock_operation_help",
-                    category="STOCK_OPERATION",
-                    data={"error": "missing_product_id", "action": action}
-                )
-            
-            # Execute appropriate API call based on action
-            if action == "STOCK_ADD":
-                if not quantity:
-                    response_message = "❌ Falta la cantidad. Usa formato: entrada 123 50"
-                    await self._store_message(user_number, "assistant", response_message)
-                    return AgentResponse(message=response_message, intent="stock_operation_error", category="STOCK_OPERATION")
-                
-                api_result = await self.mercadofiel_service.add_stock(
-                    product_id=product_id,
-                    quantity=quantity,
-                    phone_number=user_number,
-                    notes=f"Mensaje original: {cleaned}"
-                )
-            
-            elif action == "STOCK_REMOVE":
-                if not quantity:
-                    response_message = "❌ Falta la cantidad. Usa formato: salida 123 30"
-                    await self._store_message(user_number, "assistant", response_message)
-                    return AgentResponse(message=response_message, intent="stock_operation_error", category="STOCK_OPERATION")
-                
-                api_result = await self.mercadofiel_service.remove_stock(
-                    product_id=product_id,
-                    quantity=quantity,
-                    phone_number=user_number,
-                    is_sale=False,
-                    notes=f"Mensaje original: {cleaned}"
-                )
-            
-            elif action == "STOCK_SALE":
-                if not quantity:
-                    response_message = "❌ Falta la cantidad. Usa formato: venta 123 5"
-                    await self._store_message(user_number, "assistant", response_message)
-                    return AgentResponse(message=response_message, intent="stock_operation_error", category="STOCK_OPERATION")
-                
-                api_result = await self.mercadofiel_service.remove_stock(
-                    product_id=product_id,
-                    quantity=quantity,
-                    phone_number=user_number,
-                    is_sale=True,
-                    notes=f"Venta registrada. Mensaje original: {cleaned}"
-                )
-            
-            elif action == "STOCK_QUERY":
-                api_result = await self.mercadofiel_service.query_stock(product_id, phone_number=user_number)
-            
-            elif action == "STOCK_HISTORY":
-                api_result = await self.mercadofiel_service.get_history(product_id, phone_number=user_number, limit=10)
-            
-            elif action == "STOCK_ALERTS":
-                api_result = await self.mercadofiel_service.get_alerts(phone_number=user_number, resolved=False)
-            
-            elif action == "PRODUCT_LIST":
-                page = stock_op.get("page", 1)
-                search_term = stock_op.get("search_term")
-                
-                logger.info("product_list_request", extra={
-                    "phone_number": user_number,
-                    "page": page,
-                    "search_term": search_term,
-                    "text": "Requesting product list for supplier"
+            # Build context from search results
+            context_text = ""
+            sources = []
+            for score, metadata in search_results:
+                context_text += f"\n\n{metadata.get('content', '')}"
+                sources.append({
+                    "title": metadata.get("title", "unknown"),
+                    "score": f"{score:.2f}"
                 })
-                
-                api_result = await self.mercadofiel_service.get_products(
-                    phone_number=user_number,
-                    page=page,
-                    limit=10,
-                    search=search_term
-                )
             
-            elif action == "STOCK_SET":
-                if not quantity:
-                    response_message = "❌ Falta la cantidad. Usa formato: set 123 100"
-                    await self._store_message(user_number, "assistant", response_message)
-                    return AgentResponse(message=response_message, intent="stock_operation_error", category="STOCK_OPERATION")
-                
-                api_result = await self.mercadofiel_service.set_stock(
-                    product_id=product_id,
-                    new_quantity=quantity,
-                    phone_number=user_number,
-                    notes=f"Mensaje original: {cleaned}"
-                )
+            logger.info(
+                "faq_vector_context",
+                extra={
+                    "user": user_number,
+                    "category": faq_intent.get("category"),
+                    "sources": sources,
+                    "context_length": len(context_text)
+                }
+            )
             
-            else:
-                # Unknown action
-                response_message = (
-                    "❌ No identifiqué el comando correctamente.\n\n"
-                    "📋 *Comandos Disponibles:*\n\n"
-                    "*Agregar Stock:*\n"
-                    "• entrada 123 50\n"
-                    "• +3 100\n"
-                    "• agregar 20 del producto 456\n\n"
-                    "*Ventas:*\n"
-                    "• venta 123 5\n"
-                    "• vendi 10 del producto 3\n"
-                    "• -3 50 (quitar stock)\n\n"
-                    "*Consultas:*\n"
-                    "• stock 123\n"
-                    "• ?3\n"
-                    "• cuanto stock tiene el 456\n\n"
-                    "*Gestión:*\n"
-                    "• set 123 100 (establecer stock)\n"
-                    "• historial 123\n"
-                    "• alertas\n"
-                    "• productos (listar tus productos)\n"
-                    "• buscar tomates"
-                )
-                await self._store_message(user_number, "assistant", response_message)
-                return AgentResponse(
-                    message=response_message,
-                    intent="stock_operation_error",
-                    category="STOCK_OPERATION",
-                    data={"error": "unknown_action", "parsed_action": action}
-                )
+            # Generate FAQ response using vector store context
+            faq_answer = await asyncio.to_thread(
+                self.faq.generate_faq_response,
+                cleaned,
+                faq_intent,
+                context_text
+            )
             
-            # Get message from API result
-            response_message = api_result.get("message", "Operación completada")
+            # Use FAQ confidence (which is higher)
+            final_confidence = faq_intent.get("confidence", 0.8)
+            
+            logger.info(
+                "faq_response_used",
+                extra={
+                    "user": user_number,
+                    "category": faq_intent.get("category"),
+                    "confidence": final_confidence,
+                },
+            )
             
             await self._store_message(
                 user_number,
                 "assistant",
-                response_message,
+                faq_answer,
                 {
-                    "stock_operation": stock_op,
-                    "api_result": api_result
-                }
-            )
-            
-            return AgentResponse(
-                message=response_message,
-                intent="stock_operation",
-                category="STOCK_OPERATION",
-                data={
-                    "guardian": guardian_result.model_dump(),
-                    "stock": stock_op,
-                    "result": api_result
+                    "confidence": final_confidence,
+                    "faq_category": faq_intent.get("category"),
+                    "method": "faq_agent"
                 },
             )
 
+            return AgentResponse(
+                message=faq_answer,
+                intent=guardian_result.intent,
+                category=guardian_result.category,
+                data={
+                    "guardian": guardian_result.model_dump(),
+                    "faq": faq_intent,
+                    "confidence": final_confidence,
+                },
+            )
+
+        # Fall back to standard RAG if not a clear FAQ or low FAQ confidence
         rag_response: RAGResponse = await asyncio.to_thread(self.rag.answer, cleaned)
         logger.info(
             "rag_answer",
@@ -330,9 +218,20 @@ class AgentOrchestrator:
             {"confidence": rag_response.confidence, "sources": rag_response.sources},
         )
 
+        # Try to escalate on low confidence, but don't fail the request if escalation fails
         if rag_response.confidence < 0.5 and guardian_result.category == "VALID_QUERY":
             conv = await self._store_message(user_number, "system", "Confianza baja, escalando")
-            await self.handoff.escalate(conv, user_number, metadata={"reason": "low_confidence"})
+            try:
+                await self.handoff.escalate(conv, user_number, metadata={"reason": "low_confidence"})
+            except Exception as exc:
+                logger.warning(
+                    "escalation_failed_gracefully",
+                    extra={
+                        "user": user_number,
+                        "error": str(exc),
+                        "confidence": rag_response.confidence,
+                    }
+                )
 
         return AgentResponse(
             message=rag_response.answer,

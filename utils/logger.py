@@ -18,9 +18,19 @@ class JsonFormatter(logging.Formatter):
         }
         if record.exc_info:
             base["exception"] = self.formatException(record.exc_info)
-        if record.__dict__.get("extra"):
-            base.update(record.__dict__["extra"])
-        return json.dumps(base, ensure_ascii=False)
+        
+        # Add all extra fields from the record (excluding standard LogRecord attributes)
+        standard_attrs = {
+            'name', 'msg', 'args', 'created', 'filename', 'funcName', 'levelname',
+            'levelno', 'lineno', 'module', 'msecs', 'message', 'pathname', 'process',
+            'processName', 'relativeCreated', 'thread', 'threadName', 'exc_info',
+            'exc_text', 'stack_info', 'getMessage', 'asctime'
+        }
+        for key, value in record.__dict__.items():
+            if key not in standard_attrs and not key.startswith('_'):
+                base[key] = value
+        
+        return json.dumps(base, ensure_ascii=False, default=str)
 
 
 def configure_logger() -> logging.Logger:

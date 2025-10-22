@@ -1,18 +1,38 @@
-# WhatsApp AI Agent
+# WhatsApp AI Agent - CubreJardin FAQ Bot
 
-Multi‑agente construido sobre FastAPI para responder conversaciones de WhatsApp utilizando la **Meta WhatsApp Cloud API**. La solución combina guardr## Pruebas Recomendadas
+Multi‑agente construido sobre FastAPI para responder preguntas frecuentes de clientes de CubreJardin vía WhatsApp utilizando la **Meta WhatsApp Cloud API**. La solución combina recuperación aumentada (RAG), escalaciones controladas y fallbacks automáticos con plantillas aprobadas.
 
-1. **Saludo**: "Hola agente" → categoría `GREETING`.
-2. **RAG**: "¿Cuál es el catálogo de productos?" → obtiene los planes desde FAISS (confianza logueada).
-3. **Stock Add**: "entrada 123 50" → agrega 50 unidades al producto 123 vía Mercado Fiel.
-4. **Stock Query**: "stock 123" → consulta el inventario actual del producto 123.
-5. **Stock Sale**: "venta 123 5" → registra venta de 5 unidades del producto 123.
-6. **Sensibles**: "Realízame una transferencia" → categoría `SENSITIVE`, sin escalado.
-7. **Spam**: "asdfasdf" → categoría `SPAM`.
-8. **Escalación**: "Necesito hablar con un humano" → disparará `handoff_notification` y `pass_thread_control`.
-9. **Fuera de ventana**: reenvía el mismo mensaje después de 24 h (o fuerza el estado) → se envía plantilla `session_expired`.
+## Pruebas Recomendadas
 
-Consulta el documento [docs/STOCK_MANAGEMENT.md](docs/STOCK_MANAGEMENT.md) para más detalles sobre la gestión de inventario.cuperación aumentada (RAG), escalaciones controladas y fallbacks automáticos con plantillas aprobadas.
+### Preguntas Frecuentes
+
+1. **Ubicación**: "¿De dónde son ustedes?" → responde sobre reparto en Santiago y Concón
+2. **Regiones**: "¿Envían a regiones?" → explica opciones para envío fuera de Santiago
+3. **Instalación**: "¿Ustedes instalan?" → información sobre servicio de instalación
+4. **Pedido Mínimo**: "¿Cuál es el despacho mínimo?" → responde $40.000 + despacho
+5. **Paisajismo**: "¿Hacen paisajismo?" → ofrece servicio de jardines
+6. **Otros Productos**: "¿Qué otros cubresuelos venden?" → refiere a <www.cubrejardin.cl>
+7. **Comprar Web**: "¿Puedo comprar en la página?" → explica que la web es muestrario
+8. **Pago**: "¿Cómo puedo pagar?" → transferencia o efectivo contra entrega
+9. **Hacer Pedido**: "¿Cómo hago el pedido?" → explica proceso por WhatsApp
+
+### Preguntas sobre Tiqui Tiqui
+
+10. **Info General**: "Quiero info del tiqui tiqui" → envía información completa con precio y características
+11. **Conejos**: "¿Se lo comen los conejos?" → explica experiencia con conejos
+12. **Sombra**: "¿Lo puedo poner a la sombra?" → responde que es pleno sol
+13. **Sobre Pasto**: "¿Puedo ponerlo arriba del pasto?" → explica preparación del terreno
+14. **Mezclar con Pasto**: "¿Puedo mezclarlo con el pasto?" → desaconseja la mezcla
+15. **Precio**: "¿Qué precio tiene el tiqui tiqui?" → $690 por planta, 10 por m2
+16. **Cobertura**: "Quiero cubrir 20 m2" → calcula cantidad y precio total
+
+### Otros Comandos
+
+17. **Saludo**: "Hola" → categoría `GREETING`
+18. **Sensibles**: "Realízame una transferencia" → categoría `SENSITIVE`
+19. **Spam**: "asdfasdf" → categoría `SPAM`
+20. **Escalación**: "Necesito hablar con un humano" → disparará `handoff_notification` y `pass_thread_control`
+21. **Fuera de ventana**: reenvía el mismo mensaje después de 24 h → se envía plantilla `session_expired`
 
 ---
 
@@ -23,16 +43,13 @@ flowchart TD
     A[Webhook Meta Cloud API] -->|Mensaje entrante| B[Agente Guardian]
     B -->|SPAM/SENSITIVE/OFF_TOPIC| C[Respuesta automática]
     B -->|ESCALATION_REQUEST| H[Agente Handoff]
-    B -->|STOCK_OPERATION| S[Agente Stock]
     B -->|VALID_QUERY/GREETING| D[Agente RAG]
-    D -->|Consulta Vector Store| E[FAISS]
+    D -->|Consulta Vector Store| E[FAISS - FAQs]
     D -->|Consultas DB| F[(PostgreSQL)]
-    S -->|Operación Stock| MF[Mercado Fiel API]
-    MF -->|Resultado| J[Meta WhatsApp]
     H -->|Notificación| I[(Ticketing Webhook)]
     D -->|Confianza Baja| H
-    H -->|Confirmación usuario| J
-    D -->|Respuesta| J
+    H -->|Confirmación usuario| J[Meta WhatsApp]
+    D -->|Respuesta FAQ| J
     subgraph Aprendizaje Incremental
         K[Agente Humano] --> L[Learning Queue]
         L --> M[Validación]
@@ -41,19 +58,19 @@ flowchart TD
     end
 ```
 
-### Componentes Clave
+### Componentes Principales
 
 - **Webhook Meta** (`api/webhooks.py`): valida firma `X-Hub-Signature-256`, idempotencia por `message_id`, marca mensajes como leídos y delega al orquestador.
-- **Agente Guardian** (`agents/guardian_agent.py`): clasifica mensajes (VALID_QUERY, SPAM, SENSITIVE, STOCK_OPERATION, etc.) aplicando reglas explícitas.
-- **Agente Stock** (`agents/stock_agent.py`): parsea comandos de inventario (entrada, salida, venta, consulta) y ejecuta operaciones vía Mercado Fiel API.
-- **Agente RAG** (`agents/rag_agent.py`): recupera contexto desde FAISS y responde. Loguea confianza (`rag_answer`) y fuentes.
+- **Agente Guardian** (`agents/guardian_agent.py`): clasifica mensajes (VALID_QUERY, SPAM, SENSITIVE, etc.) aplicando reglas explícitas para fraudes y solicitudes financieras.
+- **Agente FAQ** (`agents/faq_agent.py`): identifica preguntas frecuentes y genera respuestas manteniendo el tono y estilo exacto de las respuestas originales.
+- **Agente RAG** (`agents/rag_agent.py`): recupera contexto desde FAISS con las FAQs y responde. Loguea confianza (`rag_answer`) y fuentes.
 - **Agente Handoff** (`agents/handoff_agent.py`): notifica al usuario, envía plantilla y ejecuta `pass_thread_control` cuando corresponde.
-- **MercadoFielService** (`services/mercadofiel_service.py`): cliente HTTP para integración con API de gestión de inventario.
 - **TemplateService** (`services/template_service.py`): fallback automático fuera de la ventana de 24 h usando plantillas aprobadas (`session_expired`, `handoff_notification`, etc.).
 - **WhatsAppService** (`services/whatsapp_service.py`): cliente async para la Cloud API v21.0 con backoff, validación SHA-256 y tracking de la última interacción.
-- **Persistencia**: Postgres (SQLAlchemy/InMemory) para conversaciones y cola de aprendizaje, FAISS para embeddings, Redis para futuros workers (cola de mensajes).
+- **Persistencia**: Postgres (SQLAlchemy/InMemory) para conversaciones y cola de aprendizaje, FAISS para embeddings de FAQs, Redis para futuros workers (cola de mensajes).
 
 ### Componentes Clave
+
 - **Webhook Meta** (`api/webhooks.py`): valida firma `X-Hub-Signature-256`, idempotencia por `message_id`, marca mensajes como leídos y delega al orquestador.
 - **Agente Guardian** (`agents/guardian_agent.py`): clasifica mensajes (VALID_QUERY, SPAM, SENSITIVE, etc.) aplicando reglas explícitas para fraudes y solicitudes financieras.
 - **Agente RAG** (`agents/rag_agent.py`): recupera contexto desde FAISS y responde. Loguea confianza (`rag_answer`) y fuentes.
@@ -124,6 +141,7 @@ docker compose up --build
 ```
 
 Servicios levantados:
+
 - `api` (FastAPI + uvicorn)
 - `db` (Postgres 15)
 - `redis` (Redis 7)
@@ -162,6 +180,7 @@ docker compose exec api bash -lc 'python scripts/load_documents.py'
 
 - **Logs**: busca entradas `rag_answer` en `docker compose logs -f api`.
 - **Base de datos** (Postgres):
+
   ```sql
   SELECT id, message, metadata->>'confidence' AS confidence
   FROM conversation
@@ -181,14 +200,34 @@ docker compose exec api bash -lc 'python scripts/load_documents.py'
 
 ---
 
-## Pruebas Recomendadas
+## Ejemplos de Consultas
 
-1. **Saludo**: “Hola agente” → categoría `GREETING`.
-2. **RAG**: “¿Cuál es el catálogo de productos?” → obtiene los planes desde FAISS (confianza logueada).
-3. **Sensibles**: “Realízame una transferencia” → categoría `SENSITIVE`, sin escalado.
-4. **Spam**: “asdfasdf” → categoría `SPAM`.
-5. **Escalación**: “Necesito hablar con un humano” → disparará `handoff_notification` y `pass_thread_control`.
-6. **Fuera de ventana**: reenvía el mismo mensaje después de 24 h (o fuerza el estado) → se envía plantilla `session_expired`.
+### Preguntas Frecuentes Generales
+
+- `¿De dónde son ustedes?` - Información sobre ubicación y cobertura
+- `¿Envían a regiones?` - Opciones de envío fuera de Santiago
+- `¿Ustedes instalan?` - Servicio de instalación
+- `¿Cuál es el despacho mínimo?` - Pedido mínimo y costos
+- `¿Hacen paisajismo?` - Servicios de diseño de jardines
+- `¿Qué otros cubresuelos venden?` - Catálogo de productos
+- `¿Puedo comprar en la página?` - Proceso de compra
+- `¿Cómo puedo pagar?` - Métodos de pago
+
+### Preguntas sobre Tiqui Tiqui
+
+- `Quiero info del tiqui tiqui` - Información completa del producto
+- `¿Se lo comen los conejos?` - Experiencia con mascotas
+- `¿Lo puedo poner a la sombra?` - Requisitos de luz solar
+- `¿Puedo ponerlo arriba del pasto?` - Preparación del terreno
+- `¿Qué precio tiene?` - Precio y cálculo por metros
+- `Quiero cubrir 20 metros cuadrados` - Cálculo de cantidad y presupuesto
+
+### Consultas Generales
+
+- `Hola` - Saludo (categoría `GREETING`)
+- `¿Cuánto cuesta el tiqui tiqui?` - Consulta de precios via RAG
+- `Realízame una transferencia` - Mensaje sensible (categoría `SENSITIVE`)
+- `Necesito hablar con un humano` - Escalación a agente humano
 
 ---
 
