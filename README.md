@@ -138,6 +138,7 @@ uvicorn main:app --reload
 ```bash
 cp .env.example .env  # completa valores reales
 docker compose up --build
+ngrok http 8000  # expone el servicio si es necesario
 ```
 
 Servicios levantados:

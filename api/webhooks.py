@@ -9,8 +9,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from agents.orchestrator import AgentOrchestrator
-from api.dependencies import get_orchestrator, get_whatsapp_service
+from api.dependencies import get_orchestrator, get_whatsapp_service, get_facebook_messenger_service
 from services.whatsapp_service import WhatsAppService
+from services.facebook_messenger_service import FacebookMessengerService
 from utils import OutsideMessagingWindowError, logger
 from config import get_settings
 
@@ -163,5 +164,163 @@ async def whatsapp_webhook(
                                 "template": template,
                             }
                         )
+
+    return {"status": "ok", "results": delivery_results}
+
+
+# ============================================================================
+# Facebook Messenger Webhooks
+# ============================================================================
+
+
+class MessengerMessage(BaseModel):
+    """Incoming Messenger message."""
+
+    mid: str
+    text: Optional[str] = None
+
+
+class MessengerSender(BaseModel):
+    """Messenger sender information."""
+
+    id: str
+
+
+class MessengerRecipient(BaseModel):
+    """Messenger recipient information."""
+
+    id: str
+
+
+class MessengerMessaging(BaseModel):
+    """Messenger messaging event."""
+
+    sender: MessengerSender
+    recipient: MessengerRecipient
+    timestamp: int
+    message: Optional[MessengerMessage] = None
+
+
+class MessengerEntry(BaseModel):
+    """Messenger webhook entry."""
+
+    id: str
+    time: int
+    messaging: List[MessengerMessaging]
+
+
+class MessengerWebhook(BaseModel):
+    """Facebook Messenger webhook payload."""
+
+    object: str
+    entry: List[MessengerEntry]
+
+
+@router.get("/facebook")
+async def verify_facebook_webhook(
+    hub_mode: str = Query(alias="hub.mode"),
+    hub_challenge: str = Query(alias="hub.challenge"),
+    hub_verify_token: str = Query(alias="hub.verify_token"),
+) -> int:
+    """Facebook Messenger verification callback."""
+
+    if hub_mode == "subscribe" and hub_verify_token == settings.facebook_messenger_verify_token:
+        logger.info("facebook_messenger_webhook_verified")
+        return int(hub_challenge)
+    logger.warning("facebook_messenger_webhook_verify_failed")
+    raise HTTPException(status_code=403, detail="Invalid verify token")
+
+
+@router.post("/facebook")
+async def facebook_messenger_webhook(
+    request: Request,
+    x_hub_signature_256: str = Header(default=""),
+    orchestrator: AgentOrchestrator = Depends(get_orchestrator),
+    messenger_service: FacebookMessengerService = Depends(get_facebook_messenger_service),
+) -> dict:
+    """Handle Facebook Messenger webhook callbacks."""
+
+    raw_body = await request.body()
+    
+    # Validate webhook signature
+    if not settings.skip_webhook_signature_validation:
+        if not messenger_service.validate_webhook_signature(raw_body, x_hub_signature_256):
+            logger.warning("facebook_messenger_invalid_signature")
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+    data = await request.json()
+    webhook = MessengerWebhook.model_validate(data)
+    delivery_results: List[dict] = []
+
+    for entry in webhook.entry:
+        for messaging_event in entry.messaging:
+            # Only process text messages
+            if not messaging_event.message or not messaging_event.message.text:
+                continue
+            
+            sender_id = messaging_event.sender.id
+            message_text = messaging_event.message.text
+            message_id = messaging_event.message.mid
+            
+            # Check if already processed
+            if await orchestrator.has_processed_message(message_id):
+                continue
+            
+            logger.info(
+                "facebook_messenger_message_received",
+                extra={
+                    "from": sender_id,
+                    "user_id": sender_id,
+                    "message_id": message_id,
+                    "message_text": message_text[:100],
+                    "text": f"Message received from {sender_id}"
+                },
+            )
+            
+            # Record interaction timestamp
+            messenger_service.record_incoming_interaction(
+                sender_id,
+                timestamp=_parse_meta_timestamp(str(messaging_event.timestamp))
+            )
+            
+            # Send typing indicator
+            try:
+                await messenger_service.send_typing_action(sender_id, "typing_on")
+            except Exception as typing_error:
+                logger.warning(
+                    "facebook_messenger_typing_failed",
+                    extra={"user_id": sender_id, "error": str(typing_error)}
+                )
+            
+            # Process message through orchestrator
+            agent_response = await orchestrator.process_message(
+                sender_id,
+                message_text,
+                message_id=message_id
+            )
+            
+            # Send response
+            try:
+                await messenger_service.send_text_message(sender_id, agent_response.message)
+                delivery_results.append({
+                    "user": sender_id,
+                    "message_id": message_id,
+                    "status": "delivered"
+                })
+            except Exception as send_error:
+                logger.error(
+                    "facebook_messenger_send_failed",
+                    extra={
+                        "user": sender_id,
+                        "message_id": message_id,
+                        "error": str(send_error)
+                    }
+                )
+                delivery_results.append({
+                    "user": sender_id,
+                    "message_id": message_id,
+                    "status": "failed",
+                    "error": str(send_error)
+                })
 
     return {"status": "ok", "results": delivery_results}

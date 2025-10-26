@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     whatsapp_webhook_verify_token: str = Field(..., validation_alias="WHATSAPP_WEBHOOK_VERIFY_TOKEN")
     skip_webhook_signature_validation: bool = Field(False, validation_alias="SKIP_WEBHOOK_SIGNATURE_VALIDATION")
     skip_messaging_window_check: bool = Field(False, validation_alias="SKIP_MESSAGING_WINDOW_CHECK")
+    
+    # 💬 Facebook Messenger
+    facebook_messenger_page_token: str = Field(..., validation_alias="FACEBOOK_MESSENGER_PAGE_TOKEN")
+    facebook_messenger_verify_token: str = Field(..., validation_alias="FACEBOOK_MESSENGER_VERIFY_TOKEN")
     default_template_name: str = Field(
         "session_expired", validation_alias="DEFAULT_TEMPLATE_NAME"
     )

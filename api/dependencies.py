@@ -11,6 +11,7 @@ from models.database import SessionLocal
 from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
 from services.whatsapp_service import WhatsAppService
+from services.facebook_messenger_service import FacebookMessengerService
 from services.template_service import TemplateService
 
 
@@ -40,6 +41,16 @@ async def get_whatsapp_service() -> AsyncGenerator[WhatsAppService, None]:
     """Provide WhatsApp service and ensure cleanup."""
 
     service = WhatsAppService()
+    try:
+        yield service
+    finally:
+        await service.close()
+
+
+async def get_facebook_messenger_service() -> AsyncGenerator[FacebookMessengerService, None]:
+    """Provide Facebook Messenger service and ensure cleanup."""
+
+    service = FacebookMessengerService()
     try:
         yield service
     finally:
