@@ -159,7 +159,7 @@ docker compose exec api bash -lc 'python scripts/load_documents.py'
 
 1. Exponer el servicio (ej. `ngrok http 8000`).
 2. En Meta Business Manager → WhatsApp → Configuration → Webhook:
-   - URL: `https://<tu-dominio>/webhook/whatsapp`
+   - URL: `https://<la url de ngrok o dominio de produccion>/webhook/whatsapp`
    - Verify token: `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
    - Suscribe eventos `messages` y `message_status`.
 3. Registra las plantillas aprobadas (`session_expired`, `handoff_notification`, etc.) en el mismo panel.
@@ -257,6 +257,19 @@ docker compose exec api bash -lc 'python scripts/load_documents.py'
 - 🔜 Integrar cola de mensajes (Redis/RQ/Celery) para envío asíncrono.
 - 🔜 Instrumentación OpenTelemetry para tracing/métricas.
 - 🔜 Botones interactivos generados por el RAG y manejo de callbacks.
+
+---
+
+## Facebook App Review
+
+Para aprobar el permiso `whatsapp_business_management` de tu app en Facebook, consulta:
+
+- **[QUICK_START_APP_REVIEW.md](./QUICK_START_APP_REVIEW.md)** - Guía rápida de inicio
+- **[FB_APP_REVIEW_GUIDE.md](./FB_APP_REVIEW_GUIDE.md)** - Guía completa con plantillas
+- **[SCREENCAST_SCRIPT.md](./SCREENCAST_SCRIPT.md)** - Script detallado para grabar el screencast
+- **[screencast_demo.html](./screencast_demo.html)** - Guía visual interactiva (abre en navegador)
+
+Esta app usa autenticación **server-to-server** (no hay login de usuarios), por lo que debes explicarlo claramente en tu submission notes.
 
 ---
 

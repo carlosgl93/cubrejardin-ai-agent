@@ -34,12 +34,16 @@ class RateLimiter:
         if now >= self.reset_time:
             self.tokens = self.capacity
             self.reset_time = now + 60
+        
         if self.tokens <= 0:
             sleep_time = self.reset_time - now
+            logger.info("rate_limit_wait", extra={"sleep_seconds": sleep_time})
             time.sleep(max(sleep_time, 0.01))
-            self.acquire()
-        else:
-            self.tokens -= 1
+            # Refill tokens after waiting
+            self.tokens = self.capacity
+            self.reset_time = time.monotonic() + 60
+        
+        self.tokens -= 1
 
 
 class OpenAIService:

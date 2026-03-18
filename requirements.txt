@@ -1,7 +1,7 @@
 fastapi==0.110.0
 uvicorn[standard]==0.29.0
 sqlalchemy==2.0.28
-psycopg[binary]==3.1.18
+psycopg[binary]==3.2.13
 redis==5.0.3
 openai>=1.30.0
 faiss-cpu>=1.8

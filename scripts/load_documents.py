@@ -71,6 +71,7 @@ def main() -> None:
             for i, chunk in enumerate(chunks):
                 if not chunk.strip():
                     continue
+                print(f"  Processing chunk {i+1}/{len(chunks)}...")
                 embedding_response = openai_service.embed(input_texts=[chunk])
                 embedding = embedding_response["data"][0]["embedding"]
                 vector_store.add_embeddings(

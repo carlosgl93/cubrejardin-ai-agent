@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     handoff_system_prompt: str = ""
 
     # ⚡ Rate limits
-    rate_limit_per_minute: int = 5
+    rate_limit_per_minute: int = 60
 
     # 🔓 CORS
     admin_allowed_origins: List[str] = Field(default_factory=lambda: ["*"])
