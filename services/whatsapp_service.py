@@ -25,11 +25,13 @@ class WhatsAppService:
     def __init__(
         self,
         *,
+        phone_id: Optional[str] = None,
+        token: Optional[str] = None,
         client: Optional[httpx.AsyncClient] = None,
         session_factory: Optional[Callable[[], InMemorySession]] = None,
     ) -> None:
-        self.phone_id = settings.whatsapp_phone_number_id
-        self.token = settings.facebook_page_access_token
+        self.phone_id = phone_id or settings.whatsapp_phone_number_id
+        self.token = token or settings.facebook_page_access_token
         self.app_secret = settings.facebook_app_secret
         if not self.phone_id or not self.token:
             raise ValueError("WhatsApp phone number ID and access token are required")

@@ -69,3 +69,4 @@ openai/
 # =========================
 *.sqlite3
 *.db
+env.prod.yaml

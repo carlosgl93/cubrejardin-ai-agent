@@ -6,7 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
 from utils import logger
@@ -22,13 +22,23 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
 
 
 class VectorStoreService:
-    """Manage vector store operations."""
+    """Manage vector store operations.
 
-    def __init__(self, index_path: str | None = None) -> None:
+    When ``tenant_id`` is provided, searches are delegated to the Supabase
+    ``match_documents`` RPC function instead of the local JSON file store.
+    """
+
+    def __init__(self, index_path: str | None = None, *, tenant_id: Optional[str] = None) -> None:
+        self.tenant_id = tenant_id
+        if tenant_id:
+            # Supabase-backed — no local file needed
+            self.vectors: List[List[float]] = []
+            self.metadata: List[Dict[str, Any]] = []
+            return
         self.index_path = index_path or settings.vector_store_path
         self.metadata_path = f"{self.index_path}.meta.json"
-        self.vectors: List[List[float]] = []
-        self.metadata: List[Dict[str, Any]] = []
+        self.vectors = []
+        self.metadata = []
         self._load()
 
     def _load(self) -> None:
@@ -62,7 +72,14 @@ class VectorStoreService:
         self._persist()
 
     def search(self, embedding: List[float], top_k: int = 5) -> List[Tuple[float, Dict[str, Any]]]:
-        """Search for similar documents."""
+        """Search for similar documents.
+
+        Delegates to Supabase ``match_documents`` when a ``tenant_id`` is set,
+        otherwise falls back to the local cosine-similarity search.
+        """
+
+        if self.tenant_id:
+            return self._search_supabase(embedding, top_k)
 
         scores = [
             (cosine_similarity(embedding, vector), metadata)
@@ -70,6 +87,29 @@ class VectorStoreService:
         ]
         scores.sort(key=lambda item: item[0], reverse=True)
         return scores[:top_k]
+
+    def _search_supabase(self, embedding: List[float], top_k: int) -> List[Tuple[float, Dict[str, Any]]]:
+        """Search tenant documents via Supabase pgvector."""
+
+        from config.supabase import get_supabase_client
+
+        sb = get_supabase_client()
+        result = sb.rpc(
+            "match_documents",
+            {
+                "query_embedding": embedding,
+                "match_count": top_k,
+                "p_tenant_id": self.tenant_id,
+            },
+        ).execute()
+
+        return [
+            (
+                row["similarity"],
+                {"title": row["title"], "content": row["content"]},
+            )
+            for row in (result.data or [])
+        ]
 
     def rebuild(self, embeddings: List[List[float]], metadatas: List[Dict[str, Any]]) -> None:
         """Rebuild index with provided data."""
