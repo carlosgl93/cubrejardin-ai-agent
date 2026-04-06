@@ -25,6 +25,40 @@ from utils import OutsideMessagingWindowError, logger
 router = APIRouter()
 settings = get_settings()
 
+# ── Meta error code → Spanish user-facing messages ───────────────────────────
+# Token/auth errors — don't attempt fallback send (it will also fail)
+_META_AUTH_ERRORS = {190, 102, 10, 200, 133010}
+
+_META_ERROR_MESSAGES: dict[int, str] = {
+    190: "Tu token de acceso ha expirado. Por favor reconecta tu cuenta de WhatsApp Business.",
+    133010: "El número no está registrado en WhatsApp Business. Verifica la configuración de tu cuenta.",
+    131026: "No se pudo entregar el mensaje. El destinatario puede no tener WhatsApp activo.",
+    131047: "El mensaje no puede enviarse fuera de la ventana de 24 horas.",
+    131048: "Límite de mensajes alcanzado. Intenta de nuevo en unos minutos.",
+    131056: "Demasiados mensajes enviados a este número. Intenta más tarde.",
+    130472: "La plantilla de mensaje no existe o no está aprobada.",
+    132000: "El número de teléfono no está habilitado para enviar mensajes.",
+}
+_META_ERROR_DEFAULT = "Ocurrió un error al enviar el mensaje. Por favor intenta de nuevo."
+
+
+def _extract_meta_error(exc: httpx.HTTPStatusError) -> tuple[int | None, str, str]:
+    """Parse a Meta API error response.
+
+    Returns (error_code, technical_message, spanish_user_message).
+    """
+    try:
+        body = exc.response.json()
+        err = body.get("error", {})
+        code: int | None = err.get("code")
+        tech_msg: str = err.get("message", str(exc))
+    except Exception:
+        code = None
+        tech_msg = str(exc)
+
+    user_msg = _META_ERROR_MESSAGES.get(code or 0, _META_ERROR_DEFAULT)
+    return code, tech_msg, user_msg
+
 
 def _validate_whatsapp_signature(payload: bytes, signature: str) -> bool:
     """Validate X-Hub-Signature-256 using the shared app secret."""
@@ -154,13 +188,18 @@ async def whatsapp_webhook(
                 token=tenant_creds["access_token"],
             )
             tenant_vector_store = VectorStoreService(tenant_id=tenant_id)
-            orchestrator = AgentOrchestrator(
-                session=SessionLocal(),
-                openai_service=openai_service,
-                vector_store=tenant_vector_store,
-                whatsapp_service=wa_service,
-                template_service=TemplateService(whatsapp_service=wa_service),
-            )
+            db = SessionLocal()
+            try:
+                orchestrator = AgentOrchestrator(
+                    session=db,
+                    openai_service=openai_service,
+                    vector_store=tenant_vector_store,
+                    whatsapp_service=wa_service,
+                    template_service=TemplateService(whatsapp_service=wa_service),
+                )
+            except Exception:
+                db.close()
+                raise
 
             try:
                 messages = change.value.messages or []
@@ -227,6 +266,34 @@ async def whatsapp_webhook(
                                     "template": template,
                                 }
                             )
+                        except httpx.HTTPStatusError as send_error:
+                            error_code, tech_msg, user_msg = _extract_meta_error(send_error)
+                            logger.error(
+                                "whatsapp_send_failed",
+                                extra={
+                                    "tenant_id": tenant_id,
+                                    "user": user_number,
+                                    "message_id": msg.id,
+                                    "meta_error_code": error_code,
+                                    "meta_error": tech_msg,
+                                    "user_message": user_msg,
+                                },
+                            )
+                            delivery_results.append({
+                                "tenant_id": tenant_id,
+                                "user": user_number,
+                                "message_id": msg.id,
+                                "status": "send_failed",
+                                "meta_error_code": error_code,
+                                "meta_error": tech_msg,
+                                "user_message": user_msg,
+                            })
+                            # Try to notify the user in Spanish, unless it's a token/auth error
+                            if error_code not in _META_AUTH_ERRORS:
+                                try:
+                                    await wa_service.send_text_message(user_number, user_msg)
+                                except Exception:
+                                    pass  # Best-effort — don't crash on fallback failure
                         except Exception as send_error:
                             logger.error(
                                 "whatsapp_send_failed",
@@ -241,6 +308,7 @@ async def whatsapp_webhook(
                                 {"tenant_id": tenant_id, "user": user_number, "message_id": msg.id, "status": "send_failed", "error": str(send_error)}
                             )
             finally:
+                db.close()
                 await wa_service.close()
 
     return {"status": "ok", "results": delivery_results}

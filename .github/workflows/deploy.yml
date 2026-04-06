@@ -1,0 +1,39 @@
+name: Deploy Backend to Cloud Run
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build & deploy via Cloud Build
+        run: |
+          gcloud builds submit \
+            --config cloudbuild.yaml \
+            --project sg-cloud-cefee
+
+      - name: Apply environment variables
+        run: |
+          printf '%s' "$ENV_PROD_YAML" > /tmp/env.prod.yaml
+          gcloud run services update whatsapp-api \
+            --region us-central1 \
+            --env-vars-file /tmp/env.prod.yaml \
+            --project sg-cloud-cefee
+          rm /tmp/env.prod.yaml
+        env:
+          ENV_PROD_YAML: ${{ secrets.ENV_PROD_YAML }}
