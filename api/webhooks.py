@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -9,14 +11,46 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from agents.orchestrator import AgentOrchestrator
-from api.dependencies import get_orchestrator, get_whatsapp_service, get_facebook_messenger_service
-from services.whatsapp_service import WhatsAppService
-from services.facebook_messenger_service import FacebookMessengerService
-from utils import OutsideMessagingWindowError, logger
+from api.dependencies import get_facebook_messenger_service, get_openai_service, get_orchestrator
 from config import get_settings
+from config.supabase import get_supabase_client
+from models.database import SessionLocal
+from services.facebook_messenger_service import FacebookMessengerService
+from services.openai_service import OpenAIService
+from services.template_service import TemplateService
+from services.vector_store import VectorStoreService
+from services.whatsapp_service import WhatsAppService
+from utils import OutsideMessagingWindowError, logger
 
 router = APIRouter()
 settings = get_settings()
+
+
+def _validate_whatsapp_signature(payload: bytes, signature: str) -> bool:
+    """Validate X-Hub-Signature-256 using the shared app secret."""
+    if not signature:
+        return False
+    expected = hmac.new(
+        settings.facebook_app_secret.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    provided = signature.split("=", 1)[1] if "=" in signature else signature
+    return hmac.compare_digest(expected, provided)
+
+
+def _resolve_tenant_credentials(phone_number_id: str) -> Optional[dict]:
+    """Look up active tenant credentials for a given phone_number_id."""
+    sb = get_supabase_client()
+    result = (
+        sb.table("tenant_whatsapp_credentials")
+        .select("tenant_id, phone_number_id, access_token")
+        .eq("phone_number_id", phone_number_id)
+        .eq("status", "active")
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
 
 
 class WhatsAppMessage(BaseModel):
@@ -87,16 +121,14 @@ async def verify_webhook(
 async def whatsapp_webhook(
     request: Request,
     x_hub_signature_256: str = Header(default=""),
-    orchestrator: AgentOrchestrator = Depends(get_orchestrator),
-    whatsapp_service: WhatsAppService = Depends(get_whatsapp_service),
+    openai_service: OpenAIService = Depends(get_openai_service),
 ) -> dict:
     """Handle WhatsApp webhook callbacks from Meta."""
 
     raw_body = await request.body()
-    
-    # Skip signature validation if explicitly disabled (for local testing with Meta dashboard)
+
     if not settings.skip_webhook_signature_validation:
-        if not whatsapp_service.validate_webhook_signature(raw_body, x_hub_signature_256):
+        if not _validate_whatsapp_signature(raw_body, x_hub_signature_256):
             logger.warning("whatsapp_invalid_signature")
             raise HTTPException(status_code=403, detail="Invalid signature")
 
@@ -106,64 +138,110 @@ async def whatsapp_webhook(
 
     for entry in webhook.entry:
         for change in entry.changes:
-            messages = change.value.messages or []
-            for msg in messages:
-                if msg.type == "text" and msg.text:
-                    user_number = msg.from_
-                    body_text = msg.text.get("body", "")
-                    if not body_text:
-                        continue
-                    if await orchestrator.has_processed_message(msg.id):
-                        continue
-                    logger.info(
-                        "whatsapp_message_received",
-                        extra={
-                            "from": user_number,
-                            "phone_number": user_number,
-                            "message_id": msg.id,
-                            "message_text": body_text[:100],  # Log first 100 chars
-                            "text": f"Message received from {user_number}"
-                        },
-                    )
-                    whatsapp_service.record_incoming_interaction(user_number, timestamp=_parse_meta_timestamp(msg.timestamp))
-                    
-                    # Try to mark as read, but don't fail if it doesn't work (e.g., test messages)
-                    try:
-                        await whatsapp_service.mark_as_read(msg.id)
-                    except Exception as mark_read_error:
-                        logger.warning(
-                            "whatsapp_mark_read_failed",
-                            extra={"message_id": msg.id, "error": str(mark_read_error)}
-                        )
-                    
-                    agent_response = await orchestrator.process_message(user_number, body_text, message_id=msg.id)
-                    try:
-                        await whatsapp_service.send_text_message(user_number, agent_response.message)
-                        delivery_results.append(
-                            {"user": user_number, "message_id": msg.id, "status": "delivered"}
-                        )
-                    except OutsideMessagingWindowError as exc:
-                        logger.warning(
-                            "whatsapp_send_outside_window",
-                            extra={"user": user_number, "message_id": msg.id},
-                        )
-                        delivery_results.append(
-                            {
-                                "user": user_number,
+            # Resolve tenant from the phone number that received the message
+            phone_number_id = change.value.metadata.get("phone_number_id", "")
+            tenant_creds = _resolve_tenant_credentials(phone_number_id)
+            if not tenant_creds:
+                logger.warning(
+                    "whatsapp_webhook_unknown_phone_id",
+                    extra={"phone_number_id": phone_number_id},
+                )
+                continue
+
+            tenant_id = tenant_creds["tenant_id"]
+            wa_service = WhatsAppService(
+                phone_id=tenant_creds["phone_number_id"],
+                token=tenant_creds["access_token"],
+            )
+            tenant_vector_store = VectorStoreService(tenant_id=tenant_id)
+            orchestrator = AgentOrchestrator(
+                session=SessionLocal(),
+                openai_service=openai_service,
+                vector_store=tenant_vector_store,
+                whatsapp_service=wa_service,
+                template_service=TemplateService(whatsapp_service=wa_service),
+            )
+
+            try:
+                messages = change.value.messages or []
+                for msg in messages:
+                    if msg.type == "text" and msg.text:
+                        user_number = msg.from_
+                        body_text = msg.text.get("body", "")
+                        if not body_text:
+                            continue
+                        if await orchestrator.has_processed_message(msg.id):
+                            continue
+                        logger.info(
+                            "whatsapp_message_received",
+                            extra={
+                                "tenant_id": tenant_id,
+                                "from": user_number,
+                                "phone_number": user_number,
                                 "message_id": msg.id,
-                                "status": "outside_window",
-                                "detail": str(exc),
-                            }
+                                "message_text": body_text[:100],
+                                "text": f"Message received from {user_number}",
+                            },
                         )
-                        template = await orchestrator.handle_outside_window(user_number, agent_response)
-                        delivery_results.append(
-                            {
-                                "user": user_number,
-                                "message_id": msg.id,
-                                "status": "template_sent",
-                                "template": template,
-                            }
+                        wa_service.record_incoming_interaction(
+                            user_number, timestamp=_parse_meta_timestamp(msg.timestamp)
                         )
+
+                        try:
+                            await wa_service.mark_as_read(msg.id)
+                        except Exception as mark_read_error:
+                            logger.warning(
+                                "whatsapp_mark_read_failed",
+                                extra={"message_id": msg.id, "error": str(mark_read_error)},
+                            )
+
+                        agent_response = await orchestrator.process_message(
+                            user_number, body_text, message_id=msg.id
+                        )
+                        try:
+                            await wa_service.send_text_message(user_number, agent_response.message)
+                            delivery_results.append(
+                                {"tenant_id": tenant_id, "user": user_number, "message_id": msg.id, "status": "delivered"}
+                            )
+                        except OutsideMessagingWindowError as exc:
+                            logger.warning(
+                                "whatsapp_send_outside_window",
+                                extra={"user": user_number, "message_id": msg.id},
+                            )
+                            delivery_results.append(
+                                {
+                                    "tenant_id": tenant_id,
+                                    "user": user_number,
+                                    "message_id": msg.id,
+                                    "status": "outside_window",
+                                    "detail": str(exc),
+                                }
+                            )
+                            template = await orchestrator.handle_outside_window(user_number, agent_response)
+                            delivery_results.append(
+                                {
+                                    "tenant_id": tenant_id,
+                                    "user": user_number,
+                                    "message_id": msg.id,
+                                    "status": "template_sent",
+                                    "template": template,
+                                }
+                            )
+                        except Exception as send_error:
+                            logger.error(
+                                "whatsapp_send_failed",
+                                extra={
+                                    "tenant_id": tenant_id,
+                                    "user": user_number,
+                                    "message_id": msg.id,
+                                    "error": str(send_error),
+                                },
+                            )
+                            delivery_results.append(
+                                {"tenant_id": tenant_id, "user": user_number, "message_id": msg.id, "status": "send_failed", "error": str(send_error)}
+                            )
+            finally:
+                await wa_service.close()
 
     return {"status": "ok", "results": delivery_results}
 

@@ -2,27 +2,9 @@ version: "3.9"
 services:
   api:
     build: .
-    depends_on:
-      - db
-      - redis
     env_file:
       - .env
-    environment:
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@db:5432/whatsapp}
     ports:
       - "8000:8000"
     volumes:
       - .:/app
-  db:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: whatsapp
-    ports:
-      - "5432:5432"
-  redis:
-    image: redis:7
-    ports:
-      - "6379:6379"

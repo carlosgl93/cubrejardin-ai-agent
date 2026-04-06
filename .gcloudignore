@@ -1,0 +1,15 @@
+.gcloudignore
+.git
+.gitignore
+.env
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+tests/
+data/
+*.faiss
+docker-compose.yml
+Dockerfile
