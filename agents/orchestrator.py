@@ -33,8 +33,10 @@ class AgentOrchestrator:
         whatsapp_service: WhatsAppService,
         template_service: TemplateService,
         mercadofiel_service: Optional[MercadoFielService] = None,
+        tenant_id: Optional[str] = None,
     ) -> None:
         self.session = session
+        self.tenant_id = tenant_id
         self.openai_service = openai_service
         self.vector_store = vector_store
         self.whatsapp_service = whatsapp_service
@@ -56,7 +58,31 @@ class AgentOrchestrator:
         message: str,
         metadata: Optional[dict] = None,
     ) -> Conversation:
-        """Persist conversation message in a background thread."""
+        """Persist conversation message.
+
+        When tenant_id is set, writes to Supabase for durability across
+        Cloud Run instances. Falls back to the in-memory session otherwise.
+        """
+
+        if self.tenant_id:
+            def _supabase_persist() -> Conversation:
+                from config.supabase import get_supabase_client
+                sb = get_supabase_client()
+                now = utc_now().isoformat()
+                row = {
+                    "tenant_id": self.tenant_id,
+                    "user_number": user_number,
+                    "role": role,
+                    "message": message,
+                    "metadata": metadata or {},
+                }
+                if role == "user":
+                    row["last_interaction_at"] = now
+                sb.table("conversations").insert(row).execute()
+                entry = Conversation(user_number=user_number, role=role, message=message, metadata=metadata or {})
+                return entry
+
+            return await asyncio.to_thread(_supabase_persist)
 
         def _persist() -> Conversation:
             timestamp = utc_now()
@@ -259,6 +285,23 @@ class AgentOrchestrator:
 
     async def has_processed_message(self, message_id: str) -> bool:
         """Return True if the inbound message id has already been processed."""
+
+        if self.tenant_id:
+            def _check_supabase() -> bool:
+                from config.supabase import get_supabase_client
+                sb = get_supabase_client()
+                result = (
+                    sb.table("conversations")
+                    .select("id")
+                    .eq("tenant_id", self.tenant_id)
+                    .eq("role", "user")
+                    .contains("metadata", {"message_id": message_id})
+                    .limit(1)
+                    .execute()
+                )
+                return bool(result.data)
+
+            return await asyncio.to_thread(_check_supabase)
 
         def _check() -> bool:
             for convo in self.session.query(Conversation):

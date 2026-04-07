@@ -196,6 +196,7 @@ async def whatsapp_webhook(
                     vector_store=tenant_vector_store,
                     whatsapp_service=wa_service,
                     template_service=TemplateService(whatsapp_service=wa_service),
+                    tenant_id=tenant_id,
                 )
             except Exception:
                 db.close()
