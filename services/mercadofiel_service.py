@@ -57,6 +57,57 @@ class MercadoFielService:
         
         return mapping.get(action, "ENTRADA_REABASTECIMIENTO")
 
+    async def execute_stock_webhook(
+        self,
+        *,
+        phone_number: str,
+        message: str,
+        product_id: int,
+        quantity: Optional[int],
+        action: str,
+    ) -> Dict[str, Any]:
+        """Legacy stock webhook executor kept for backward compatibility in tests/old flows."""
+
+        endpoint = f"{self.base_url}/stock/webhook"
+        payload = {
+            "phone_number": phone_number,
+            "message": message,
+            "product_id": product_id,
+            "quantity": quantity,
+            "action": action,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    endpoint,
+                    json=payload,
+                    headers=self._get_headers(phone_number),
+                )
+
+            if 200 <= response.status_code < 300:
+                data = response.json()
+                return {
+                    "success": bool(data.get("success", True)),
+                    "response": data.get("response", "Operacion completada"),
+                    "data": data,
+                }
+
+            return {
+                "success": False,
+                "response": f"Error del servidor: {getattr(response, 'text', response.status_code)}",
+            }
+        except httpx.TimeoutException:
+            return {
+                "success": False,
+                "response": "Tiempo de espera agotado",
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "response": f"Error de conexion: {exc}",
+            }
+
     async def add_stock(
         self, 
         product_id: str, 
@@ -800,14 +851,33 @@ class MercadoFielService:
             }
 
     async def check_supplier_permissions(self, phone_number: str) -> bool:
-        """
-        Verify if the phone number is registered as a supplier.
-        
-        Note: This endpoint doesn't exist yet in Mercado Fiel API.
-        Returns True for now - implement authorization in bot's database instead.
-        """
-        logger.warning("supplier_verification_not_implemented", extra={
-            "phone": phone_number,
-            "info": "Supplier verification should be handled in bot's database"
-        })
-        return True
+        """Verify whether the caller is authorized to perform supplier stock actions."""
+
+        endpoint = f"{self.base_url}/auth/supplier/verify"
+        payload = {"phone_number": phone_number}
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    endpoint,
+                    json=payload,
+                    headers=self._get_headers(phone_number),
+                )
+
+            if 200 <= response.status_code < 300:
+                try:
+                    data = response.json()
+                except Exception:
+                    return True
+                return bool(data.get("authorized", True))
+
+            if response.status_code in {401, 403, 404}:
+                return False
+
+            return False
+        except httpx.TimeoutException:
+            logger.error("mercadofiel_timeout", extra={"operation": "check_supplier_permissions"})
+            return False
+        except Exception as exc:
+            logger.error("mercadofiel_exception", extra={"error": str(exc)})
+            return False

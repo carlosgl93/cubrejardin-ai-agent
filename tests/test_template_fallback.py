@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-from api.webhooks import whatsapp_webhook
+from api import webhooks
 from models.schemas import AgentResponse
 from services.template_service import TemplateService
 from utils import OutsideMessagingWindowError
@@ -103,7 +103,7 @@ async def test_template_service_uses_mapping() -> None:
 
 
 @pytest.mark.anyio("asyncio")
-async def test_webhook_fallback_sends_template() -> None:
+async def test_webhook_fallback_sends_template(monkeypatch: pytest.MonkeyPatch) -> None:
     """Webhook should fallback to templates when outside window."""
 
     payload = {
@@ -140,11 +140,22 @@ async def test_webhook_fallback_sends_template() -> None:
     )
     orchestrator = DummyOrchestrator(template_service=template_service)
 
-    response = await whatsapp_webhook(
+    monkeypatch.setattr(webhooks, "_validate_whatsapp_signature", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        webhooks,
+        "_resolve_tenant_credentials",
+        lambda *_args, **_kwargs: {
+            "tenant_id": "tenant-a",
+            "phone_number_id": "phone-id",
+            "access_token": "token",
+        },
+    )
+    monkeypatch.setattr(webhooks, "WhatsAppService", lambda *args, **kwargs: fake_client)
+    monkeypatch.setattr(webhooks, "AgentOrchestrator", lambda *args, **kwargs: orchestrator)
+
+    response = await webhooks.whatsapp_webhook(
         request=DummyRequest(payload),
         x_hub_signature_256="sha256=dummy",
-        orchestrator=orchestrator,  # type: ignore[arg-type]
-        whatsapp_service=fake_client,  # type: ignore[arg-type]
     )
 
     assert orchestrator.fallback_calls

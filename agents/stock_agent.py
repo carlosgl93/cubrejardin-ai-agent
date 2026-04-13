@@ -247,3 +247,16 @@ Responde SOLO con JSON:
                 }
         
         return None
+
+    def format_stock_response(self, api_result: Dict[str, Any], action: str) -> str:
+        """Format stock operation responses for WhatsApp delivery."""
+
+        response_text = str(api_result.get("response", "")).strip()
+        if api_result.get("success"):
+            return response_text or f"✅ Operacion {action} ejecutada correctamente."
+
+        if response_text.startswith("❌"):
+            return response_text
+        if not response_text:
+            return f"❌ No se pudo ejecutar la operacion {action}."
+        return f"❌ {response_text}"
