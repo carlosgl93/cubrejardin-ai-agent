@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from models.database import Conversation, InMemorySession, utc_now
+from sqlalchemy import desc, select
+
+from models.database import Conversation, DatabaseSession, utc_now
 from models.schemas import AgentResponse, GuardianResult, RAGResponse
 from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
@@ -27,7 +29,7 @@ class AgentOrchestrator:
     def __init__(
         self,
         *,
-        session: InMemorySession,
+        session: DatabaseSession,
         openai_service: OpenAIService,
         vector_store: VectorStoreService,
         whatsapp_service: WhatsAppService,
@@ -38,12 +40,18 @@ class AgentOrchestrator:
         self.session = session
         self.tenant_id = tenant_id
         self.openai_service = openai_service
-        self.vector_store = vector_store
+        if tenant_id and getattr(vector_store, "tenant_id", None) != tenant_id:
+            self.vector_store = VectorStoreService(
+                tenant_id=tenant_id,
+                backend=getattr(vector_store, "backend", None),
+            )
+        else:
+            self.vector_store = vector_store
         self.whatsapp_service = whatsapp_service
         self.template_service = template_service
         self.mercadofiel_service = mercadofiel_service or MercadoFielService()
         self.guardian = GuardianAgent(openai_service)
-        self.rag = RAGAgent(openai_service, vector_store)
+        self.rag = RAGAgent(openai_service, self.vector_store)
         self.faq = FAQAgent(openai_service)
         self.handoff = HandoffAgent(
             openai_service=openai_service,
@@ -56,46 +64,31 @@ class AgentOrchestrator:
         user_number: str,
         role: str,
         message: str,
-        metadata: Optional[dict] = None,
+        payload: Optional[dict] = None,
+        message_id: Optional[str] = None,
     ) -> Conversation:
         """Persist conversation message.
 
-        When tenant_id is set, writes to Supabase for durability across
-        Cloud Run instances. Falls back to the in-memory session otherwise.
+        All operational messages are persisted in Postgres/Supabase through
+        the shared SQLAlchemy session.
         """
 
-        if self.tenant_id:
-            def _supabase_persist() -> Conversation:
-                from config.supabase import get_supabase_client
-                sb = get_supabase_client()
-                now = utc_now().isoformat()
-                row = {
-                    "tenant_id": self.tenant_id,
-                    "user_number": user_number,
-                    "role": role,
-                    "message": message,
-                    "metadata": metadata or {},
-                }
-                if role == "user":
-                    row["last_interaction_at"] = now
-                sb.table("conversations").insert(row).execute()
-                entry = Conversation(user_number=user_number, role=role, message=message, metadata=metadata or {})
-                return entry
-
-            return await asyncio.to_thread(_supabase_persist)
-
-        def _persist() -> Conversation:
-            timestamp = utc_now()
-            entry = Conversation(user_number=user_number, role=role, message=message, metadata=metadata or {})
-            entry.created_at = timestamp
-            if role == "user":
-                entry.last_interaction_at = timestamp
-            entry.updated_at = timestamp
-            self.session.add(entry)
-            self.session.commit()
-            return entry
-
-        return await asyncio.to_thread(_persist)
+        timestamp = utc_now()
+        entry = Conversation(
+            tenant_id=self.tenant_id,
+            user_number=user_number,
+            role=role,
+            message=message,
+            message_id=message_id,
+            payload=payload or {},
+            last_interaction_at=timestamp if role == "user" else None,
+        )
+        entry.created_at = timestamp
+        entry.updated_at = timestamp
+        self.session.add(entry)
+        self.session.commit()
+        self.session.refresh(entry)
+        return entry
 
     async def process_message(
         self,
@@ -111,7 +104,13 @@ class AgentOrchestrator:
         user_metadata = guardian_result.model_dump()
         if message_id:
             user_metadata["message_id"] = message_id
-        await self._store_message(user_number, "user", cleaned, user_metadata)
+        await self._store_message(
+            user_number,
+            "user",
+            cleaned,
+            user_metadata,
+            message_id=message_id,
+        )
         logger.info("guardian_classification", extra=guardian_result.model_dump())
         logger.info("guardian result", extra={"result": guardian_result})
 
@@ -286,30 +285,14 @@ class AgentOrchestrator:
     async def has_processed_message(self, message_id: str) -> bool:
         """Return True if the inbound message id has already been processed."""
 
+        statement = (
+            select(Conversation.id)
+            .where(Conversation.role == "user")
+            .where(Conversation.message_id == message_id)
+            .order_by(desc(Conversation.id))
+            .limit(1)
+        )
         if self.tenant_id:
-            def _check_supabase() -> bool:
-                from config.supabase import get_supabase_client
-                sb = get_supabase_client()
-                result = (
-                    sb.table("conversations")
-                    .select("id")
-                    .eq("tenant_id", self.tenant_id)
-                    .eq("role", "user")
-                    .contains("metadata", {"message_id": message_id})
-                    .limit(1)
-                    .execute()
-                )
-                return bool(result.data)
+            statement = statement.where(Conversation.tenant_id == self.tenant_id)
 
-            return await asyncio.to_thread(_check_supabase)
-
-        def _check() -> bool:
-            for convo in self.session.query(Conversation):
-                if convo.role != "user":
-                    continue
-                metadata = convo.metadata or {}
-                if metadata.get("message_id") == message_id:
-                    return True
-            return False
-
-        return await asyncio.to_thread(_check)
+        return self.session.scalar(statement) is not None

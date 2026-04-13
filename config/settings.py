@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Dict, List
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic.networks import HttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"   # estable
     openai_temperature: float = 0.2
     embedding_model: str = "text-embedding-3-small"
+    embedding_dimension: int = Field(1536, validation_alias="EMBEDDING_DIMENSION")
 
     # 📦 Infra
     database_url: str = "postgresql+psycopg://postgres:postgres@db:5432/whatsapp"
@@ -61,8 +62,14 @@ class Settings(BaseSettings):
     webhook_base_url: HttpUrl = Field(..., validation_alias="WEBHOOK_BASE_URL")
 
     # 📚 Vector store
-    vector_store_path: str = "data/vector_store/index.faiss"
-    documents_path: str = "data/documents"
+    vector_backend: str = Field("pgvector", validation_alias="VECTOR_BACKEND")
+    vector_store_path: str = Field("data/vector_store/index.json", validation_alias="VECTOR_STORE_PATH")
+    documents_path: str = Field("data/documents", validation_alias="DOCUMENTS_PATH")
+    match_documents_rpc: str = Field("match_documents", validation_alias="MATCH_DOCUMENTS_RPC")
+    vector_search_min_similarity: float = Field(
+        0.0,
+        validation_alias="VECTOR_SEARCH_MIN_SIMILARITY",
+    )
 
     # 🤖 System prompts
     guardian_system_prompt: str = ""
@@ -79,6 +86,30 @@ class Settings(BaseSettings):
     supabase_url: str = Field("", validation_alias="SUPABASE_URL")
     supabase_service_role_key: str = Field("", validation_alias="SUPABASE_SERVICE_ROLE_KEY")
     supabase_jwt_secret: str = Field("", validation_alias="SUPABASE_JWT_SECRET")
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug_flag(cls, value):  # type: ignore[no-untyped-def]
+        """Allow deployment-style debug values such as 'release' or 'production'."""
+
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"release", "prod", "production"}:
+                return False
+            if normalized in {"debug", "dev", "development"}:
+                return True
+        return value
+
+    @field_validator("vector_backend", mode="before")
+    @classmethod
+    def normalize_vector_backend(cls, value):  # type: ignore[no-untyped-def]
+        """Normalize supported vector store backend values."""
+
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"pgvector", "local"}:
+                return normalized
+        raise ValueError("VECTOR_BACKEND must be 'pgvector' or 'local'")
 
 
 @lru_cache

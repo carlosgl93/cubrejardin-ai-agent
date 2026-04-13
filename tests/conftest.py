@@ -21,7 +21,11 @@ _REQUIRED_ENV = {
     "FACEBOOK_APP_SECRET": "app-secret",
     "FACEBOOK_TARGET_APP_ID": "263902037430900",
     "WHATSAPP_WEBHOOK_VERIFY_TOKEN": "verify-token",
+    "FACEBOOK_MESSENGER_PAGE_TOKEN": "messenger-token",
+    "FACEBOOK_MESSENGER_VERIFY_TOKEN": "messenger-verify-token",
     "WEBHOOK_BASE_URL": "https://example.com",
+    "DATABASE_URL": "sqlite+pysqlite:///:memory:",
+    "VECTOR_BACKEND": "local",
     "DEFAULT_TEMPLATE_NAME": "session_expired",
     "TEMPLATE_MAPPING": '{"handoff":"handoff_notification"}',
     # Legacy Twilio values kept for backward compatibility in stubs/tests
@@ -39,6 +43,16 @@ def anyio_backend() -> str:
     """Force AnyIO tests to run on asyncio backend to avoid trio dependency."""
 
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def reset_database_state():
+    """Ensure each test starts with a clean SQLAlchemy-backed database."""
+
+    from models.database import reset_database
+
+    reset_database()
+    yield
 
 
 # Ignore interactive script when collecting tests

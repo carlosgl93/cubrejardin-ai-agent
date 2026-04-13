@@ -25,10 +25,11 @@ def test_settings_apply_defaults(monkeypatch):
     assert settings.openai_api_key == "sk-test"
     assert settings.whatsapp_phone_number_id == "1234567890"
     assert settings.openai_model == "gpt-4o-mini"
-    assert settings.rate_limit_per_minute == 5
+    assert settings.rate_limit_per_minute == 60
     assert settings.admin_allowed_origins == ["*"]
     assert settings.default_template_name == "session_expired"
     assert settings.template_mapping["handoff"] == "handoff_notification"
+    assert settings.vector_backend == "local"
 
 
 def test_settings_default_factory_creates_new_instances(monkeypatch):

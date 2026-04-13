@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from models.database import InMemorySession, KnowledgeBaseDocument, LearningQueueEntry
+from sqlalchemy import select
+
+from models.database import DatabaseSession, LearningQueueEntry
+from services.audit_service import record_audit_event
 from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
 from utils import logger
@@ -13,12 +16,13 @@ from utils import logger
 class LearningService:
     """Handle learning queue lifecycle."""
 
-    def __init__(self, session: InMemorySession) -> None:
+    def __init__(self, session: DatabaseSession) -> None:
         self.session = session
 
     def queue_human_response(
         self,
         *,
+        tenant_id: Optional[str],
         conversation_id: int,
         user_message: str,
         human_answer: str,
@@ -28,12 +32,15 @@ class LearningService:
         """Store a human-provided answer for later validation."""
 
         entry = LearningQueueEntry(
-            question=user_message,
-            answer=human_answer,
-            metadata=metadata or {},
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            user_message=user_message,
+            human_answer=human_answer,
+            validated=False,
+            payload=metadata or {},
         )
         # extra attributes for traceability
-        entry.metadata.update(
+        entry.payload.update(
             {
                 "conversation_id": conversation_id,
                 "source": source,
@@ -41,9 +48,17 @@ class LearningService:
         )
         self.session.add(entry)
         self.session.commit()
+        self.session.refresh(entry)
         logger.info(
             "learning_queue_human_response",
             extra={"conversation_id": conversation_id, "entry_id": entry.id},
+        )
+        record_audit_event(
+            tenant_id=tenant_id,
+            event_type="learning_queued",
+            entity_type="learning_queue_entry",
+            entity_id=str(entry.id),
+            payload={"conversation_id": conversation_id, "source": source},
         )
         return entry
 
@@ -58,9 +73,16 @@ class LearningService:
         entry = self.session.get(LearningQueueEntry, entry_id)
         if not entry:
             return None
-        entry.metadata["validated"] = True
+        entry.validated = True
         self.session.commit()
         logger.info("learning_entry_validated", extra={"entry_id": entry_id})
+        record_audit_event(
+            tenant_id=entry.tenant_id,
+            event_type="learning_validated",
+            entity_type="learning_queue_entry",
+            entity_id=str(entry.id),
+            payload={"conversation_id": entry.conversation_id},
+        )
         return entry
 
     def ingest_validated_learning(
@@ -72,11 +94,10 @@ class LearningService:
     ) -> int:
         """Embed validated queue entries and push them into the vector store."""
 
-        entries = [
-            entry
-            for entry in self.session.query(LearningQueueEntry)
-            if entry.metadata.get("validated") and (entry_ids is None or entry.id in entry_ids)
-        ]
+        statement = select(LearningQueueEntry).where(LearningQueueEntry.validated.is_(True))
+        if entry_ids is not None:
+            statement = statement.where(LearningQueueEntry.id.in_(entry_ids))
+        entries = self.session.scalars(statement)
         if not entries:
             logger.info("learning_no_validated_entries", extra={"entry_ids": entry_ids or []})
             return 0
@@ -84,34 +105,48 @@ class LearningService:
         metadatas: List[Dict[str, Any]] = []
         embeddings: List[List[float]] = []
         for entry in entries:
-            response = openai_service.embed(input_texts=[entry.question])
+            source_title = entry.payload.get("source_title", f"learning-entry-{entry.id}")
+            content = (
+                f"Pregunta del cliente: {entry.user_message}\n"
+                f"Respuesta validada: {entry.human_answer}"
+            )
+            response = openai_service.embed(input_texts=[content])
             embedding = response["data"][0]["embedding"]
             embeddings.append(embedding)
+            vector_store.delete_documents_by_source_title(source_title, tenant_id=entry.tenant_id)
             metadatas.append(
                 {
-                    "id": f"learning-{entry.id}",
-                    "conversation_id": entry.metadata.get("conversation_id"),
-                    "title": entry.metadata.get("title", "Aprendizaje validado"),
-                    "content": entry.answer,
-                    "question": entry.question,
-                    "source": entry.metadata.get("source", "human_handoff"),
+                    "tenant_id": entry.tenant_id,
+                    "title": entry.payload.get("title", f"Aprendizaje validado #{entry.id}"),
+                    "content": content,
+                    "file_type": "learning",
+                    "metadata": {
+                        **dict(entry.payload),
+                        "learning_entry_id": entry.id,
+                        "conversation_id": entry.conversation_id,
+                        "question": entry.user_message,
+                        "answer": entry.human_answer,
+                        "source": entry.payload.get("source", "human_handoff"),
+                        "source_title": source_title,
+                    },
                 }
             )
 
         vector_store.add_embeddings(embeddings, metadatas)
 
-        # Opcional: convertir entradas validadas en documentos de KB
         for entry in entries:
-            document = KnowledgeBaseDocument(
-                title=entry.metadata.get("title", f"Entry {entry.id}"),
-                content=entry.answer,
-                metadata=entry.metadata,
-            )
-            self.session.add(document)
             self.session.delete(entry)
 
         self.session.commit()
         logger.info("learning_entries_ingested", extra={"count": len(entries)})
+        for entry in entries:
+            record_audit_event(
+                tenant_id=entry.tenant_id,
+                event_type="learning_ingested",
+                entity_type="learning_queue_entry",
+                entity_id=str(entry.id),
+                payload={"conversation_id": entry.conversation_id},
+            )
         return len(entries)
 
     def reject_examples(self, entry_ids: List[int]) -> None:
@@ -120,6 +155,14 @@ class LearningService:
         for entry_id in entry_ids:
             entry = self.session.get(LearningQueueEntry, entry_id)
             if entry:
+                tenant_id = entry.tenant_id
                 self.session.delete(entry)
+                record_audit_event(
+                    tenant_id=tenant_id,
+                    event_type="learning_rejected",
+                    entity_type="learning_queue_entry",
+                    entity_id=str(entry_id),
+                    payload={},
+                )
         self.session.commit()
         logger.info("learning_rejected", extra={"count": len(entry_ids)})

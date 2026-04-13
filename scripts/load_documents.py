@@ -1,8 +1,8 @@
-"""Load documents into knowledge base."""
+"""Load markdown documents directly into the tenant pgvector store."""
 
 from __future__ import annotations
 
-import os
+import argparse
 import sys
 from pathlib import Path
 
@@ -10,91 +10,69 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from models.database import KnowledgeBaseDocument, SessionLocal
+from config import settings
+from services.document_ingestion import ingest_document
 from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
 
-DOCUMENTS_DIR = Path("data/documents")
+
+def parse_args() -> argparse.Namespace:
+    """Parse script arguments."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tenant-id", required=True, help="Tenant UUID that owns the documents")
+    parser.add_argument(
+        "--source-dir",
+        default=settings.documents_path,
+        help="Directory containing source markdown files",
+    )
+    return parser.parse_args()
 
 
-def chunk_faq_document(content: str) -> list[str]:
-    """Split FAQ document into individual Q&A pairs."""
-    chunks = []
-    lines = content.split('\n')
-    current_chunk = []
-    
-    for line in lines:
-        # Start of a new question (### heading)
-        if line.startswith('###'):
-            # Save previous chunk if it exists
-            if current_chunk:
-                chunks.append('\n'.join(current_chunk))
-            # Start new chunk with this question
-            current_chunk = [line]
-        else:
-            # Add line to current chunk
-            if current_chunk or line.strip():  # Skip leading empty lines
-                current_chunk.append(line)
-    
-    # Add last chunk
-    if current_chunk:
-        chunks.append('\n'.join(current_chunk))
-    
-    return chunks
+def detect_file_type(path: Path) -> str:
+    """Infer file type metadata from the source file."""
+
+    suffix = path.suffix.lower()
+    if suffix == ".md":
+        return "markdown"
+    if suffix == ".txt":
+        return "text"
+    return suffix.lstrip(".") or "text"
 
 
 def main() -> None:
-    """Load markdown documents into database and vector store."""
+    """Load markdown documents into the shared pgvector store."""
 
-    session = SessionLocal()
-    vector_store = VectorStoreService()
+    args = parse_args()
+    source_dir = Path(args.source_dir)
+    if not source_dir.exists():
+        raise FileNotFoundError(f"Source directory not found: {source_dir}")
+
+    vector_store = VectorStoreService(tenant_id=args.tenant_id)
     openai_service = OpenAIService()
-    
-    for path in DOCUMENTS_DIR.glob("*.md"):
+    total_chunks = 0
+    processed_files = 0
+
+    for path in sorted(source_dir.glob("*.md")):
         content = path.read_text(encoding="utf-8")
         title = path.stem.replace("_", " ")
-        
-        # Store full document in database
-        document = KnowledgeBaseDocument(
+        result = ingest_document(
+            tenant_id=args.tenant_id,
             title=title,
             content=content,
-            metadata={"path": str(path)}
+            file_type=detect_file_type(path),
+            metadata={"source_path": str(path), "source_title": title},
+            openai_service=openai_service,
+            vector_store=vector_store,
         )
-        session.add(document)
-        session.commit()
-        
-        # For FAQs, chunk into individual Q&A pairs
-        if path.stem == "faqs":
-            chunks = chunk_faq_document(content)
-            print(f"Chunking {title} into {len(chunks)} Q&A pairs")
-            
-            for i, chunk in enumerate(chunks):
-                if not chunk.strip():
-                    continue
-                print(f"  Processing chunk {i+1}/{len(chunks)}...")
-                embedding_response = openai_service.embed(input_texts=[chunk])
-                embedding = embedding_response["data"][0]["embedding"]
-                vector_store.add_embeddings(
-                    [embedding],
-                    [{
-                        "title": f"{title} - Q{i+1}",
-                        "content": chunk,
-                        "id": f"{document.id}_chunk_{i}",
-                        "source": title
-                    }]
-                )
-            print(f"Loaded {title} ({len(chunks)} chunks)")
-        else:
-            # For other documents, embed as single chunk
-            embedding_response = openai_service.embed(input_texts=[content])
-            embedding = embedding_response["data"][0]["embedding"]
-            vector_store.add_embeddings(
-                [embedding],
-                [{"title": title, "content": content, "id": document.id}]
-            )
-            print(f"Loaded {title}")
-    
-    session.close()
+        processed_files += 1
+        total_chunks += int(result["chunks"])
+        print(f"Loaded {result['title']} ({result['chunks']} chunks)")
+
+    print(
+        f"Completed tenant {args.tenant_id}: "
+        f"{processed_files} files, {total_chunks} chunks from {source_dir}"
+    )
 
 
 if __name__ == "__main__":
