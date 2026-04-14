@@ -2,6 +2,23 @@
 
 Multi‑agente construido sobre FastAPI para responder preguntas frecuentes de clientes de CubreJardin vía WhatsApp utilizando la **Meta WhatsApp Cloud API**. La solución combina recuperación aumentada (RAG), escalaciones controladas y fallbacks automáticos con plantillas aprobadas.
 
+## Estado Actual
+
+| Componente | Estado actual | Nota |
+| --- | --- | --- |
+| Canal productivo | WhatsApp | Es el único canal activo y prioritario hoy |
+| Messenger | Opcional / deshabilitable | Si no configuras `FACEBOOK_MESSENGER_*`, `/webhook/facebook` responde `503` |
+| RAG | Activo sobre Supabase + pgvector | `documents` + RPC `match_documents` |
+| Estado operativo | Activo sobre Postgres/Supabase | `conversations`, `escalations`, `learning_queue`, `audit_logs` |
+| Docker Compose | Solo API | Postgres/Supabase y Meta viven fuera del compose |
+| Redis | Reservado | `REDIS_URL` queda para futuro, no se usa en el runtime actual |
+
+## Modo Operativo Recomendado
+
+- **Desarrollo / staging:** FastAPI local apuntando al Postgres real de Supabase mediante `DATABASE_URL`.
+- **Webhook público:** usa un dominio propio o una herramienta externa como `ngrok` solo para exponer el webhook en desarrollo.
+- **Fuente de verdad:** Supabase/Postgres para estado operativo y `pgvector` para recuperación semántica.
+
 ## Pruebas Recomendadas
 
 ### Preguntas Frecuentes
@@ -67,17 +84,7 @@ flowchart TD
 - **Agente Handoff** (`agents/handoff_agent.py`): notifica al usuario, envía plantilla y ejecuta `pass_thread_control` cuando corresponde.
 - **TemplateService** (`services/template_service.py`): fallback automático fuera de la ventana de 24 h usando plantillas aprobadas (`session_expired`, `handoff_notification`, etc.).
 - **WhatsAppService** (`services/whatsapp_service.py`): cliente async para la Cloud API v21.0 con backoff, validación SHA-256 y tracking de la última interacción.
-- **Persistencia**: Postgres/SQLAlchemy para conversaciones y cola de aprendizaje, Supabase/Postgres + pgvector para RAG multiempresa, Redis para futuros workers (cola de mensajes).
-
-### Componentes Clave
-
-- **Webhook Meta** (`api/webhooks.py`): valida firma `X-Hub-Signature-256`, idempotencia por `message_id`, marca mensajes como leídos y delega al orquestador.
-- **Agente Guardian** (`agents/guardian_agent.py`): clasifica mensajes (VALID_QUERY, SPAM, SENSITIVE, etc.) aplicando reglas explícitas para fraudes y solicitudes financieras.
-- **Agente RAG** (`agents/rag_agent.py`): recupera contexto desde `documents` vía RPC `match_documents` y responde. Loguea confianza (`rag_answer`) y fuentes.
-- **Agente Handoff** (`agents/handoff_agent.py`): notifica al usuario, envía plantilla y ejecuta `pass_thread_control` cuando corresponde.
-- **TemplateService** (`services/template_service.py`): fallback automático fuera de la ventana de 24 h usando plantillas aprobadas (`session_expired`, `handoff_notification`, etc.).
-- **WhatsAppService** (`services/whatsapp_service.py`): cliente async para la Cloud API v21.0 con backoff, validación SHA-256 y tracking de la última interacción.
-- **Persistencia**: Postgres/SQLAlchemy para conversaciones y cola de aprendizaje, Supabase/Postgres + pgvector para embeddings/documentos, Redis para futuros workers (cola de mensajes).
+- **Persistencia**: Postgres/SQLAlchemy para conversaciones, escalaciones, learning queue y auditoría; Supabase/Postgres + pgvector para RAG multiempresa.
 
 ---
 
@@ -92,7 +99,7 @@ flowchart TD
 
 ## Variables de Entorno
 
-Configura `.env` a partir de `.env.example`.
+Configura el archivo `./.env` en la **raíz del repo** a partir de `.env.example`. `utils/.env` no es el archivo que carga la aplicación.
 
 | Variable | Descripción |
 | --- | --- |
@@ -107,11 +114,11 @@ Configura `.env` a partir de `.env.example`.
 | `FACEBOOK_MESSENGER_TENANT_ID` | Opcional. Fallback legado de tenant fijo para Messenger; en multi-tenant serio debes usar `tenant_messenger_credentials` |
 | `DEFAULT_TEMPLATE_NAME` | Plantilla por defecto para fuera de ventana (ej. `session_expired`) |
 | `TEMPLATE_MAPPING` | JSON con mapeos `intención → plantilla` (ej. `{ "handoff": "handoff_notification" }`) |
-| `WEBHOOK_BASE_URL` | URL pública (ngrok / dominio) |
+| `WEBHOOK_BASE_URL` | URL pública del webhook. En desarrollo puedes exponerla con una herramienta externa como `ngrok` |
 | `MERCADO_FIEL_API_URL` | URL base de la API de Mercado Fiel (para gestión de stock) |
 | `MERCADO_FIEL_API_KEY` | Token de autenticación para Mercado Fiel API |
 | `DATABASE_URL` | URL SQLAlchemy al Postgres real. En producción debe apuntar al Postgres de Supabase, no al stub local |
-| `REDIS_URL` | (Docker Compose) URL para Redis |
+| `REDIS_URL` | Reservado para futuras colas/workers. Hoy no se usa en el runtime actual |
 | `SUPABASE_URL` | URL del proyecto Supabase usado por el RAG |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key para ingesta/búsqueda server-to-server |
 | `VECTOR_BACKEND` | Backend de vectores (`pgvector` en producción, `local` solo para test/dev) |
@@ -133,7 +140,7 @@ pip install -r requirements.txt
 # sql/migrations/002_documents_and_match_documents.sql
 # sql/migrations/003_harden_supabase_multi_tenant_schema.sql
 # sql/migrations/004_add_audit_logs.sql
-# sql/migrations/005_add_tenant_messenger_credentials.sql
+# sql/migrations/005_add_tenant_messenger_credentials.sql  # opcional, solo si habilitas Messenger
 
 # Carga documentos al tenant en pgvector
 python scripts/load_documents.py --tenant-id <tenant_uuid>
@@ -158,14 +165,13 @@ uvicorn main:app --reload
 ```bash
 cp .env.example .env  # completa valores reales
 docker compose up --build
-ngrok http 8000  # expone el servicio si es necesario
 ```
 
 Servicios levantados:
 
 - `api` (FastAPI + uvicorn)
-- `db` (Postgres 15)
-- `redis` (Redis 7)
+
+`docker-compose.yml` hoy solo levanta la API. Postgres/Supabase, Meta y cualquier herramienta de exposición pública como `ngrok` viven fuera del compose.
 
 Carga documentos desde el host (con el contenedor en marcha):
 
@@ -177,7 +183,7 @@ docker compose exec api bash -lc 'python scripts/load_documents.py --tenant-id <
 
 ## Configuración del Webhook en Meta
 
-1. Exponer el servicio (ej. `ngrok http 8000`).
+1. Exponer el servicio con un dominio público o, en desarrollo, con una herramienta externa como `ngrok`.
 2. En Meta Business Manager → WhatsApp → Configuration → Webhook:
    - URL: `https://<la url de ngrok o dominio de produccion>/webhook/whatsapp`
    - Verify token: `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
@@ -204,7 +210,7 @@ docker compose exec api bash -lc 'python scripts/load_documents.py --tenant-id <
 
   ```sql
   SELECT id, message, metadata->>'confidence' AS confidence
-  FROM conversation
+  FROM conversations
   WHERE role = 'assistant'
   ORDER BY id DESC LIMIT 5;
   ```
@@ -274,7 +280,7 @@ docker compose exec api bash -lc 'python scripts/load_documents.py --tenant-id <
 - ✅ Enforcement de ventana de 24 h con fallback a plantillas.
 - ✅ Idempotencia de webhooks por `message_id`.
 - ✅ Logging de confianza y fuentes por respuesta.
-- 🔜 Integrar cola de mensajes (Redis/RQ/Celery) para envío asíncrono.
+- 🔜 Integrar cola de mensajes real (Redis/RQ/Celery) para envío asíncrono.
 - 🔜 Instrumentación OpenTelemetry para tracing/métricas.
 - 🔜 Botones interactivos generados por el RAG y manejo de callbacks.
 

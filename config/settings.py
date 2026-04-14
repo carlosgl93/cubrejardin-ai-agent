@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     # 📦 Infra
     database_url: str = "postgresql+psycopg://postgres:postgres@db:5432/whatsapp"
+    # Reserved for future async workers/queues. Current runtime does not use Redis yet.
     redis_url: str = "redis://redis:6379/0"
 
     # 📱 WhatsApp / Meta
