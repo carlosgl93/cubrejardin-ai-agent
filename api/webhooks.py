@@ -7,11 +7,12 @@ import hmac
 from datetime import datetime, timezone
 from typing import List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from agents.orchestrator import AgentOrchestrator
-from api.dependencies import get_facebook_messenger_service, get_openai_service, get_orchestrator
+from agents.orchestrator import DuplicateInboundMessageError
+from api.dependencies import build_orchestrator, get_openai_service
 from config import get_settings
 from config.supabase import get_supabase_client
 from models.database import SessionLocal
@@ -85,6 +86,61 @@ def _resolve_tenant_credentials(phone_number_id: str) -> Optional[dict]:
         .execute()
     )
     return result.data[0] if result.data else None
+
+
+def _validate_facebook_messenger_signature(payload: bytes, signature: str) -> bool:
+    """Validate X-Hub-Signature-256 for Facebook Messenger webhooks."""
+
+    if not signature:
+        return False
+    expected = hmac.new(
+        settings.facebook_app_secret.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    provided = signature.split("=", 1)[1] if "=" in signature else signature
+    return hmac.compare_digest(expected, provided)
+
+
+def _resolve_facebook_messenger_credentials(page_id: str) -> Optional[dict]:
+    """Resolve Messenger tenant and access token from the page id.
+
+    The production path is DB-first via tenant_messenger_credentials.
+    A legacy env-based fallback is kept for single-tenant deployments.
+    """
+
+    sb = get_supabase_client()
+    result = (
+        sb.table("tenant_messenger_credentials")
+        .select("tenant_id, page_id, page_access_token")
+        .eq("page_id", page_id)
+        .eq("status", "active")
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return result.data[0]
+
+    legacy_tenant_id = settings.facebook_messenger_tenant_id.strip()
+    legacy_token = settings.facebook_messenger_page_token.strip()
+    if legacy_tenant_id and legacy_token:
+        return {
+            "tenant_id": legacy_tenant_id,
+            "page_id": page_id,
+            "page_access_token": legacy_token,
+            "source": "legacy_env",
+        }
+    return None
+
+
+def _ensure_facebook_messenger_enabled() -> None:
+    """Fail closed when Messenger support is not configured."""
+
+    if not settings.facebook_messenger_verify_token.strip():
+        raise HTTPException(
+            status_code=503,
+            detail="Facebook Messenger webhook is not configured for this deployment",
+        )
 
 
 class WhatsAppMessage(BaseModel):
@@ -190,11 +246,11 @@ async def whatsapp_webhook(
             tenant_vector_store = VectorStoreService(tenant_id=tenant_id)
             db = SessionLocal()
             try:
-                orchestrator = AgentOrchestrator(
-                    session=db,
+                orchestrator = build_orchestrator(
+                    db=db,
                     openai_service=openai_service,
                     vector_store=tenant_vector_store,
-                    whatsapp_service=wa_service,
+                    messaging_service=wa_service,
                     template_service=TemplateService(whatsapp_service=wa_service),
                     tenant_id=tenant_id,
                 )
@@ -211,6 +267,14 @@ async def whatsapp_webhook(
                         if not body_text:
                             continue
                         if await orchestrator.has_processed_message(msg.id):
+                            delivery_results.append(
+                                {
+                                    "tenant_id": tenant_id,
+                                    "user": user_number,
+                                    "message_id": msg.id,
+                                    "status": "duplicate",
+                                }
+                            )
                             continue
                         logger.info(
                             "whatsapp_message_received",
@@ -235,9 +299,20 @@ async def whatsapp_webhook(
                                 extra={"message_id": msg.id, "error": str(mark_read_error)},
                             )
 
-                        agent_response = await orchestrator.process_message(
-                            user_number, body_text, message_id=msg.id
-                        )
+                        try:
+                            agent_response = await orchestrator.process_message(
+                                user_number, body_text, message_id=msg.id
+                            )
+                        except DuplicateInboundMessageError:
+                            delivery_results.append(
+                                {
+                                    "tenant_id": tenant_id,
+                                    "user": user_number,
+                                    "message_id": msg.id,
+                                    "status": "duplicate",
+                                }
+                            )
+                            continue
                         try:
                             await wa_service.send_text_message(user_number, agent_response.message)
                             delivery_results.append(
@@ -371,6 +446,7 @@ async def verify_facebook_webhook(
 ) -> int:
     """Facebook Messenger verification callback."""
 
+    _ensure_facebook_messenger_enabled()
     if hub_mode == "subscribe" and hub_verify_token == settings.facebook_messenger_verify_token:
         logger.info("facebook_messenger_webhook_verified")
         return int(hub_challenge)
@@ -382,16 +458,16 @@ async def verify_facebook_webhook(
 async def facebook_messenger_webhook(
     request: Request,
     x_hub_signature_256: str = Header(default=""),
-    orchestrator: AgentOrchestrator = Depends(get_orchestrator),
-    messenger_service: FacebookMessengerService = Depends(get_facebook_messenger_service),
+    openai_service: OpenAIService = Depends(get_openai_service),
 ) -> dict:
     """Handle Facebook Messenger webhook callbacks."""
 
+    _ensure_facebook_messenger_enabled()
     raw_body = await request.body()
-    
+
     # Validate webhook signature
     if not settings.skip_webhook_signature_validation:
-        if not messenger_service.validate_webhook_signature(raw_body, x_hub_signature_256):
+        if not _validate_facebook_messenger_signature(raw_body, x_hub_signature_256):
             logger.warning("facebook_messenger_invalid_signature")
             raise HTTPException(status_code=403, detail="Invalid signature")
 
@@ -400,74 +476,127 @@ async def facebook_messenger_webhook(
     delivery_results: List[dict] = []
 
     for entry in webhook.entry:
-        for messaging_event in entry.messaging:
-            # Only process text messages
-            if not messaging_event.message or not messaging_event.message.text:
-                continue
-            
-            sender_id = messaging_event.sender.id
-            message_text = messaging_event.message.text
-            message_id = messaging_event.message.mid
-            
-            # Check if already processed
-            if await orchestrator.has_processed_message(message_id):
-                continue
-            
-            logger.info(
-                "facebook_messenger_message_received",
-                extra={
-                    "from": sender_id,
-                    "user_id": sender_id,
-                    "message_id": message_id,
-                    "message_text": message_text[:100],
-                    "text": f"Message received from {sender_id}"
-                },
+        page_id = entry.id
+        tenant_creds = _resolve_facebook_messenger_credentials(page_id)
+        if not tenant_creds:
+            logger.warning(
+                "facebook_messenger_unknown_page_id",
+                extra={"page_id": page_id},
             )
-            
-            # Record interaction timestamp
-            messenger_service.record_incoming_interaction(
-                sender_id,
-                timestamp=_parse_meta_timestamp(str(messaging_event.timestamp))
+            continue
+
+        tenant_id = tenant_creds["tenant_id"]
+        messenger_service = FacebookMessengerService(token=tenant_creds["page_access_token"])
+        db = SessionLocal()
+        try:
+            orchestrator = build_orchestrator(
+                db=db,
+                openai_service=openai_service,
+                vector_store=VectorStoreService(tenant_id=tenant_id),
+                messaging_service=messenger_service,
+                template_service=TemplateService(whatsapp_service=messenger_service),
+                tenant_id=tenant_id,
             )
-            
-            # Send typing indicator
-            try:
-                await messenger_service.send_typing_action(sender_id, "typing_on")
-            except Exception as typing_error:
-                logger.warning(
-                    "facebook_messenger_typing_failed",
-                    extra={"user_id": sender_id, "error": str(typing_error)}
-                )
-            
-            # Process message through orchestrator
-            agent_response = await orchestrator.process_message(
-                sender_id,
-                message_text,
-                message_id=message_id
-            )
-            
-            # Send response
-            try:
-                await messenger_service.send_text_message(sender_id, agent_response.message)
-                delivery_results.append({
-                    "user": sender_id,
-                    "message_id": message_id,
-                    "status": "delivered"
-                })
-            except Exception as send_error:
-                logger.error(
-                    "facebook_messenger_send_failed",
+
+            for messaging_event in entry.messaging:
+                # Only process text messages
+                if not messaging_event.message or not messaging_event.message.text:
+                    continue
+
+                sender_id = messaging_event.sender.id
+                message_text = messaging_event.message.text
+                message_id = messaging_event.message.mid
+
+                if await orchestrator.has_processed_message(message_id):
+                    delivery_results.append(
+                        {
+                            "tenant_id": tenant_id,
+                            "page_id": page_id,
+                            "user": sender_id,
+                            "message_id": message_id,
+                            "status": "duplicate",
+                        }
+                    )
+                    continue
+
+                logger.info(
+                    "facebook_messenger_message_received",
                     extra={
-                        "user": sender_id,
+                        "tenant_id": tenant_id,
+                        "page_id": page_id,
+                        "from": sender_id,
+                        "user_id": sender_id,
                         "message_id": message_id,
-                        "error": str(send_error)
-                    }
+                        "message_text": message_text[:100],
+                        "text": f"Message received from {sender_id}",
+                    },
                 )
-                delivery_results.append({
-                    "user": sender_id,
-                    "message_id": message_id,
-                    "status": "failed",
-                    "error": str(send_error)
-                })
+
+                messenger_service.record_incoming_interaction(
+                    sender_id,
+                    timestamp=_parse_meta_timestamp(str(messaging_event.timestamp)),
+                )
+
+                try:
+                    await messenger_service.send_typing_action(sender_id, "typing_on")
+                except Exception as typing_error:
+                    logger.warning(
+                        "facebook_messenger_typing_failed",
+                        extra={"user_id": sender_id, "error": str(typing_error)},
+                    )
+
+                try:
+                    agent_response = await orchestrator.process_message(
+                        sender_id,
+                        message_text,
+                        message_id=message_id,
+                    )
+                except DuplicateInboundMessageError:
+                    delivery_results.append(
+                        {
+                            "tenant_id": tenant_id,
+                            "page_id": page_id,
+                            "user": sender_id,
+                            "message_id": message_id,
+                            "status": "duplicate",
+                        }
+                    )
+                    continue
+
+                try:
+                    await messenger_service.send_text_message(sender_id, agent_response.message)
+                    delivery_results.append(
+                        {
+                            "tenant_id": tenant_id,
+                            "page_id": page_id,
+                            "user": sender_id,
+                            "message_id": message_id,
+                            "status": "delivered",
+                        }
+                    )
+                except Exception as send_error:
+                    logger.error(
+                        "facebook_messenger_send_failed",
+                        extra={
+                            "tenant_id": tenant_id,
+                            "page_id": page_id,
+                            "user": sender_id,
+                            "message_id": message_id,
+                            "error": str(send_error),
+                        },
+                    )
+                    delivery_results.append(
+                        {
+                            "tenant_id": tenant_id,
+                            "page_id": page_id,
+                            "user": sender_id,
+                            "message_id": message_id,
+                            "status": "failed",
+                            "error": str(send_error),
+                        }
+                    )
+        finally:
+            db.close()
+            await messenger_service.close()
 
     return {"status": "ok", "results": delivery_results}

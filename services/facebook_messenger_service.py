@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 
 from config import settings
-from models.database import Conversation, InMemorySession, SessionLocal
+from models.database import Conversation, DatabaseSession, SessionLocal
 from utils import logger
 
 
@@ -25,10 +25,11 @@ class FacebookMessengerService:
     def __init__(
         self,
         *,
+        token: Optional[str] = None,
         client: Optional[httpx.AsyncClient] = None,
-        session_factory: Optional[Callable[[], InMemorySession]] = None,
+        session_factory: Optional[Callable[[], DatabaseSession]] = None,
     ) -> None:
-        self.token = settings.facebook_messenger_page_token
+        self.token = token or settings.facebook_messenger_page_token
         self.app_secret = settings.facebook_app_secret
         if not self.token:
             raise ValueError("Facebook Messenger page token is required")
@@ -36,7 +37,7 @@ class FacebookMessengerService:
             base_url=self.BASE_URL,
             timeout=30.0,
         )
-        self._session_factory: Callable[[], InMemorySession] = session_factory or SessionLocal
+        self._session_factory: Callable[[], DatabaseSession] = session_factory or SessionLocal
         self._last_interactions: Dict[str, datetime] = {}
 
     async def close(self) -> None:
@@ -110,6 +111,64 @@ class FacebookMessengerService:
             extra={"to": recipient_id, "buttons": len(buttons)},
         )
         return await self._request("POST", "/me/messages", json=payload)
+
+    async def send_template_message(
+        self,
+        to: str,
+        template_name: str,
+        *,
+        language: str = "es",
+        components: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Compatibility shim for flows that expect template sending support.
+
+        Messenger does not use WhatsApp templates. We degrade gracefully to a
+        plain text send so shared orchestration code can still be reused.
+        """
+
+        fallback_text = template_name
+        if components:
+            try:
+                parameters = components[0].get("parameters", [])
+                values = [
+                    str(parameter.get("text", "")).strip()
+                    for parameter in parameters
+                    if isinstance(parameter, dict) and parameter.get("text")
+                ]
+                if values:
+                    fallback_text = " ".join(values)
+            except Exception:
+                fallback_text = template_name
+        return await self.send_text_message(to, fallback_text)
+
+    async def pass_thread_control(
+        self,
+        recipient_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Pass thread control to the configured target app."""
+
+        payload = {
+            "recipient": {"id": recipient_id},
+            "target_app_id": settings.facebook_target_app_id,
+            "metadata": metadata or {},
+        }
+        logger.info("messenger_pass_thread_control", extra={"recipient": recipient_id})
+        return await self._request("POST", "/me/pass_thread_control", json=payload)
+
+    async def take_thread_control(
+        self,
+        recipient_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Take back thread control for the bot app."""
+
+        payload = {
+            "recipient": {"id": recipient_id},
+            "metadata": metadata or {},
+        }
+        logger.info("messenger_take_thread_control", extra={"recipient": recipient_id})
+        return await self._request("POST", "/me/take_thread_control", json=payload)
 
     def validate_webhook_signature(self, payload: bytes, signature: str) -> bool:
         """Validate X-Hub-Signature-256 header from Facebook."""

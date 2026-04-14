@@ -151,7 +151,7 @@ async def test_webhook_fallback_sends_template(monkeypatch: pytest.MonkeyPatch) 
         },
     )
     monkeypatch.setattr(webhooks, "WhatsAppService", lambda *args, **kwargs: fake_client)
-    monkeypatch.setattr(webhooks, "AgentOrchestrator", lambda *args, **kwargs: orchestrator)
+    monkeypatch.setattr(webhooks, "build_orchestrator", lambda *args, **kwargs: orchestrator)
 
     response = await webhooks.whatsapp_webhook(
         request=DummyRequest(payload),

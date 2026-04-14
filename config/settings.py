@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     # 📦 Infra
     database_url: str = "postgresql+psycopg://postgres:postgres@db:5432/whatsapp"
+    # Reserved for future async workers/queues. Current runtime does not use Redis yet.
     redis_url: str = "redis://redis:6379/0"
 
     # 📱 WhatsApp / Meta
@@ -45,8 +46,9 @@ class Settings(BaseSettings):
     whatsapp_business_account_id: str = Field("", validation_alias="WHATSAPP_BUSINESS_ACCOUNT_ID")
 
     # 💬 Facebook Messenger
-    facebook_messenger_page_token: str = Field(..., validation_alias="FACEBOOK_MESSENGER_PAGE_TOKEN")
-    facebook_messenger_verify_token: str = Field(..., validation_alias="FACEBOOK_MESSENGER_VERIFY_TOKEN")
+    facebook_messenger_page_token: str = Field("", validation_alias="FACEBOOK_MESSENGER_PAGE_TOKEN")
+    facebook_messenger_verify_token: str = Field("", validation_alias="FACEBOOK_MESSENGER_VERIFY_TOKEN")
+    facebook_messenger_tenant_id: str = Field("", validation_alias="FACEBOOK_MESSENGER_TENANT_ID")
     default_template_name: str = Field(
         "session_expired", validation_alias="DEFAULT_TEMPLATE_NAME"
     )

@@ -57,7 +57,9 @@ def test_learning_service_ingests_validated_entries_into_documents() -> None:
     )
 
     assert ingested == 1
-    assert session.query(LearningQueueEntry) == []
+    persisted = session.get(LearningQueueEntry, entry.id)
+    assert persisted is not None
+    assert persisted.ingested_at is not None
     assert vector_store.deleted == [("tenant-a", f"learning-entry-{entry.id}")]
 
     call = vector_store.add_calls[0]

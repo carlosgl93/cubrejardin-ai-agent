@@ -10,7 +10,7 @@ from typing import List
 import httpx
 import pytest
 
-from models.database import Conversation, InMemorySession, SessionLocal, utc_now
+from models.database import Conversation, SessionLocal, utc_now
 from services.whatsapp_service import WhatsAppService
 from utils import OutsideMessagingWindowError
 
@@ -99,13 +99,12 @@ async def test_send_text_message_raises_outside_window(monkeypatch) -> None:
 async def test_is_within_window_loads_from_persistence(monkeypatch) -> None:
     """The service should consult the persistence layer when cache is cold."""
 
-    InMemorySession.storage.clear()
-    InMemorySession.counters.clear()
     monkeypatch.setattr("services.whatsapp_service.settings", DummySettings, raising=False)
 
     session = SessionLocal()
     recent_ts = utc_now()
     conversation = Conversation(
+        tenant_id="00000000-0000-0000-0000-000000000001",
         user_number="521999888777",
         role="user",
         message="Hola",

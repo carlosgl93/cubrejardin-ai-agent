@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, Optional
 
-from models.database import Conversation, Escalation, InMemorySession
+from sqlalchemy import desc, select
+
+from models.database import Conversation, DatabaseSession, Escalation, utc_now
+from services.audit_service import record_audit_event
 from services.learning_service import LearningService
 from services.openai_service import OpenAIService
 from services.whatsapp_service import WhatsAppService
@@ -20,7 +22,7 @@ class HandoffAgent:
         *,
         openai_service: OpenAIService,
         whatsapp_service: WhatsAppService,
-        session: InMemorySession,
+        session: DatabaseSession,
         learning_service: Optional[LearningService] = None,
     ) -> None:
         self.openai_service = openai_service
@@ -36,29 +38,53 @@ class HandoffAgent:
     ) -> Escalation:
         """Trigger WhatsApp handover protocol to a human agent."""
 
-        def _persist() -> Escalation:
-            escalation = Escalation(
-                conversation_id=conversation.id,
-                status="pending",
-                handoff_type="to_human",
-                metadata=metadata or {},
-            )
-            self.session.add(escalation)
-            self.session.commit()
-            return escalation
-
-        escalation = await asyncio.to_thread(_persist)
+        escalation = Escalation(
+            tenant_id=conversation.tenant_id,
+            conversation_id=conversation.id,
+            status="pending",
+            handoff_type="to_human",
+            payload=metadata or {},
+        )
+        self.session.add(escalation)
+        self.session.commit()
+        self.session.refresh(escalation)
         try:
             await self.whatsapp_service.pass_thread_control(
                 recipient_id=conversation.user_number,
                 metadata=metadata or {},
             )
         except Exception as exc:  # pragma: no cover
+            escalation.status = "cancelled"
+            escalation.notes = str(exc)
+            escalation.updated_at = utc_now()
+            self.session.commit()
+            record_audit_event(
+                tenant_id=conversation.tenant_id,
+                event_type="handoff_failed",
+                entity_type="escalation",
+                entity_id=str(escalation.id),
+                payload={
+                    "conversation_id": conversation.id,
+                    "reason": metadata or {},
+                    "error": str(exc),
+                },
+            )
             logger.error(
                 "handoff_pass_control_error",
                 extra={"conversation_id": conversation.id, "error": str(exc)},
             )
             raise
+        escalation.status = "in_progress"
+        escalation.updated_at = utc_now()
+        self.session.commit()
+        self.session.refresh(escalation)
+        record_audit_event(
+            tenant_id=conversation.tenant_id,
+            event_type="handoff_requested",
+            entity_type="escalation",
+            entity_id=str(escalation.id),
+            payload={"conversation_id": conversation.id, "reason": metadata or {}},
+        )
         logger.info(
             "handoff_pass_control_success",
             extra={"conversation_id": conversation.id, "escalation_id": escalation.id},
@@ -85,16 +111,27 @@ class HandoffAgent:
             )
             raise
 
-        def _resolve() -> None:
-            for escalation in reversed(self.session.query(Escalation)):
-                if escalation.conversation_id == conversation.id and escalation.status != "resolved":
-                    escalation.status = "resolved"
-                    escalation.handoff_type = "to_bot"
-                    escalation.metadata.update(metadata or {})
-                    break
-            self.session.commit()
-
-        await asyncio.to_thread(_resolve)
+        statement = (
+            select(Escalation)
+            .where(Escalation.conversation_id == conversation.id)
+            .where(Escalation.status != "resolved")
+            .order_by(desc(Escalation.id))
+            .limit(1)
+        )
+        escalation = self.session.scalar(statement)
+        if escalation:
+            escalation.status = "resolved"
+            escalation.handoff_type = "to_bot"
+            escalation.payload.update(metadata or {})
+            escalation.updated_at = utc_now()
+        self.session.commit()
+        record_audit_event(
+            tenant_id=conversation.tenant_id,
+            event_type="handoff_resolved",
+            entity_type="conversation",
+            entity_id=str(conversation.id),
+            payload={"escalation_id": escalation.id if escalation else None, "metadata": metadata or {}},
+        )
         logger.info(
             "handoff_take_control_success",
             extra={"conversation_id": conversation.id},
@@ -110,15 +147,13 @@ class HandoffAgent:
     ) -> None:
         """Persist a human response into the learning queue."""
 
-        def _queue() -> Any:
-            return self.learning_service.queue_human_response(
-                conversation_id=conversation.id,
-                user_message=user_message,
-                human_answer=human_answer,
-                metadata=metadata,
-            )
-
-        entry = await asyncio.to_thread(_queue)
+        entry = self.learning_service.queue_human_response(
+            tenant_id=conversation.tenant_id,
+            conversation_id=conversation.id,
+            user_message=user_message,
+            human_answer=human_answer,
+            metadata=metadata,
+        )
         logger.info(
             "handoff_human_response_recorded",
             extra={"conversation_id": conversation.id, "entry_id": entry.id},
