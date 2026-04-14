@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import desc, select
 
 from models.database import Conversation, DatabaseSession, utc_now
@@ -21,6 +22,15 @@ from .guardian_agent import GuardianAgent
 from .handoff_agent import HandoffAgent
 from .rag_agent import RAGAgent
 from .faq_agent import FAQAgent
+
+
+class DuplicateInboundMessageError(RuntimeError):
+    """Raised when an inbound user message was already persisted."""
+
+    def __init__(self, message_id: str, tenant_id: Optional[str]) -> None:
+        super().__init__(f"Duplicate inbound message: {message_id}")
+        self.message_id = message_id
+        self.tenant_id = tenant_id
 
 
 class AgentOrchestrator:
@@ -86,7 +96,17 @@ class AgentOrchestrator:
         entry.created_at = timestamp
         entry.updated_at = timestamp
         self.session.add(entry)
-        self.session.commit()
+        try:
+            self.session.commit()
+        except IntegrityError as exc:
+            self.session.rollback()
+            if role == "user" and message_id:
+                logger.info(
+                    "duplicate_inbound_message_detected",
+                    extra={"tenant_id": self.tenant_id, "message_id": message_id},
+                )
+                raise DuplicateInboundMessageError(message_id=message_id, tenant_id=self.tenant_id) from exc
+            raise
         self.session.refresh(entry)
         return entry
 

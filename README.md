@@ -102,12 +102,15 @@ Configura `.env` a partir de `.env.example`.
 | `FACEBOOK_APP_SECRET` | Se usa para validar la firma del webhook |
 | `FACEBOOK_TARGET_APP_ID` | App objetivo para handover (por defecto Page Inbox) |
 | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Token usado en la verificación inicial de Meta |
+| `FACEBOOK_MESSENGER_PAGE_TOKEN` | Opcional. Token legado de página para Messenger; solo se usa como fallback si habilitas ese canal |
+| `FACEBOOK_MESSENGER_VERIFY_TOKEN` | Opcional. Token de verificación del webhook de Messenger |
+| `FACEBOOK_MESSENGER_TENANT_ID` | Opcional. Fallback legado de tenant fijo para Messenger; en multi-tenant serio debes usar `tenant_messenger_credentials` |
 | `DEFAULT_TEMPLATE_NAME` | Plantilla por defecto para fuera de ventana (ej. `session_expired`) |
 | `TEMPLATE_MAPPING` | JSON con mapeos `intención → plantilla` (ej. `{ "handoff": "handoff_notification" }`) |
 | `WEBHOOK_BASE_URL` | URL pública (ngrok / dominio) |
 | `MERCADO_FIEL_API_URL` | URL base de la API de Mercado Fiel (para gestión de stock) |
 | `MERCADO_FIEL_API_KEY` | Token de autenticación para Mercado Fiel API |
-| `DATABASE_URL` | (Docker Compose) URL para Postgres |
+| `DATABASE_URL` | URL SQLAlchemy al Postgres real. En producción debe apuntar al Postgres de Supabase, no al stub local |
 | `REDIS_URL` | (Docker Compose) URL para Redis |
 | `SUPABASE_URL` | URL del proyecto Supabase usado por el RAG |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key para ingesta/búsqueda server-to-server |
@@ -128,6 +131,9 @@ pip install -r requirements.txt
 # Ejecuta las migraciones SQL en tu Postgres/Supabase
 # sql/migrations/001_enable_pgvector.sql
 # sql/migrations/002_documents_and_match_documents.sql
+# sql/migrations/003_harden_supabase_multi_tenant_schema.sql
+# sql/migrations/004_add_audit_logs.sql
+# sql/migrations/005_add_tenant_messenger_credentials.sql
 
 # Carga documentos al tenant en pgvector
 python scripts/load_documents.py --tenant-id <tenant_uuid>
@@ -138,6 +144,12 @@ uvicorn main:app --reload
 
 - Ejecuta pruebas: `pytest`
 - Simulación CLI: `python scripts/test_conversation.py`
+
+> **Importante:** el estado operativo del bot (`conversations`, `escalations`, `learning_queue`) ya usa SQLAlchemy sobre `DATABASE_URL`. Si quieres una sola fuente de verdad en producción, ese valor debe apuntar al Postgres de Supabase.
+>
+> **Messenger opcional:** si hoy solo operas con WhatsApp, puedes dejar vacías las variables `FACEBOOK_MESSENGER_*`. El backend seguirá arrancando y `/webhook/facebook` responderá `503` hasta que ese canal se configure.
+>
+> **Messenger multi-tenant:** cuando lo habilites, el webhook `/webhook/facebook` resolverá `tenant_id` y token por `page_id` desde `tenant_messenger_credentials`. El uso de `FACEBOOK_MESSENGER_TENANT_ID` quedó solo como compatibilidad temporal para despliegues antiguos de un solo tenant.
 
 ---
 

@@ -1,4 +1,4 @@
-"""Tests for the WhatsApp webhook endpoint."""
+"""Tests for the webhook endpoints."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any, Dict
 import pytest
 from fastapi import HTTPException
 
+from api import webhooks
 from api.webhooks import whatsapp_webhook
 
 
@@ -39,3 +40,20 @@ async def test_webhook_rejects_invalid_signature(monkeypatch) -> None:
 
     assert exc.value.status_code == 403
     assert exc.value.detail == "Invalid signature"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_facebook_webhook_returns_503_when_messenger_disabled(monkeypatch) -> None:
+    """Facebook webhook should fail closed when Messenger is not configured."""
+
+    monkeypatch.setattr(webhooks.settings, "facebook_messenger_verify_token", "", raising=False)
+    request = DummyRequest({"object": "page", "entry": []})
+
+    with pytest.raises(HTTPException) as exc:
+        await webhooks.facebook_messenger_webhook(
+            request=request,
+            x_hub_signature_256="sha256=valid",
+            openai_service=object(),
+        )
+
+    assert exc.value.status_code == 503

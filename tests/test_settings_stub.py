@@ -51,6 +51,27 @@ def test_settings_default_factory_creates_new_instances(monkeypatch):
     assert settings_two.admin_allowed_origins == ["*"]
 
 
+def test_settings_allow_whatsapp_only_without_messenger(monkeypatch):
+    """Messenger env vars should be optional for WhatsApp-only deployments."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-only-wa")
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "1234567890")
+    monkeypatch.setenv("FACEBOOK_PAGE_ACCESS_TOKEN", "wa-token")
+    monkeypatch.setenv("FACEBOOK_APP_SECRET", "wa-secret")
+    monkeypatch.setenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "wa-verify")
+    monkeypatch.setenv("WEBHOOK_BASE_URL", "https://whatsapp-only.example")
+    monkeypatch.setenv("DEFAULT_TEMPLATE_NAME", "session_expired")
+    monkeypatch.setenv("TEMPLATE_MAPPING", '{"handoff":"handoff_notification"}')
+    monkeypatch.delenv("FACEBOOK_MESSENGER_PAGE_TOKEN", raising=False)
+    monkeypatch.delenv("FACEBOOK_MESSENGER_VERIFY_TOKEN", raising=False)
+    monkeypatch.delenv("FACEBOOK_MESSENGER_TENANT_ID", raising=False)
+
+    settings = Settings()
+
+    assert settings.facebook_messenger_page_token == ""
+    assert settings.facebook_messenger_verify_token == ""
+
+
 def test_settings_reload_uses_cached_env(tmp_path, monkeypatch):
     """Values from env files should be loaded when available."""
 
