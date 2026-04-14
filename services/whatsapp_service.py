@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 
 from config import settings
-from models.database import Conversation, InMemorySession, SessionLocal
+from models.database import Conversation, DatabaseSession, SessionLocal
 from utils import OutsideMessagingWindowError, logger
 
 
@@ -28,7 +28,7 @@ class WhatsAppService:
         phone_id: Optional[str] = None,
         token: Optional[str] = None,
         client: Optional[httpx.AsyncClient] = None,
-        session_factory: Optional[Callable[[], InMemorySession]] = None,
+        session_factory: Optional[Callable[[], DatabaseSession]] = None,
     ) -> None:
         self.phone_id = phone_id or settings.whatsapp_phone_number_id
         self.token = token or settings.facebook_page_access_token
@@ -39,7 +39,7 @@ class WhatsAppService:
             base_url=self.BASE_URL,
             timeout=30.0,
         )
-        self._session_factory: Callable[[], InMemorySession] = session_factory or SessionLocal
+        self._session_factory: Callable[[], DatabaseSession] = session_factory or SessionLocal
         self._last_interactions: Dict[str, datetime] = {}
 
     async def close(self) -> None:

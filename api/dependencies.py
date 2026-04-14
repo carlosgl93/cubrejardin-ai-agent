@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import AsyncGenerator, Generator
+from typing import Any, AsyncGenerator, Generator, Optional
 
 from fastapi import Depends
 
@@ -57,18 +57,45 @@ async def get_facebook_messenger_service() -> AsyncGenerator[FacebookMessengerSe
         await service.close()
 
 
+def build_orchestrator(
+    *,
+    db: Any,
+    openai_service: OpenAIService,
+    vector_store: VectorStoreService,
+    messaging_service: Any,
+    template_service: Optional[TemplateService] = None,
+    tenant_id: Optional[str] = None,
+) -> AgentOrchestrator:
+    """Build an orchestrator for the provided transport and tenant context."""
+
+    if getattr(vector_store, "backend", None) == "pgvector" and not tenant_id:
+        raise ValueError("tenant_id is required when building an orchestrator with pgvector")
+
+    return AgentOrchestrator(
+        session=db,
+        openai_service=openai_service,
+        vector_store=vector_store,
+        whatsapp_service=messaging_service,
+        template_service=template_service or TemplateService(whatsapp_service=messaging_service),
+        tenant_id=tenant_id,
+    )
+
+
 def get_orchestrator(
     db=Depends(get_db),
     openai_service: OpenAIService = Depends(get_openai_service),
     vector_store: VectorStoreService = Depends(get_vector_store),
     whatsapp_service: WhatsAppService = Depends(get_whatsapp_service),
 ) -> AgentOrchestrator:
-    """Provide orchestrator instance."""
+    """Provide the default orchestrator instance for local/test routes.
 
-    return AgentOrchestrator(
-        session=db,
+    Production pgvector flows must supply an explicit tenant-aware vector store.
+    """
+
+    return build_orchestrator(
+        db=db,
         openai_service=openai_service,
         vector_store=vector_store,
-        whatsapp_service=whatsapp_service,
-        template_service=TemplateService(whatsapp_service=whatsapp_service),
+        messaging_service=whatsapp_service,
+        tenant_id=getattr(vector_store, "tenant_id", None),
     )

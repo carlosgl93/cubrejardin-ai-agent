@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 
-from models.database import DatabaseSession, LearningQueueEntry
+from models.database import DatabaseSession, LearningQueueEntry, utc_now
 from services.audit_service import record_audit_event
 from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
@@ -65,7 +65,12 @@ class LearningService:
     def list_queue(self) -> List[LearningQueueEntry]:
         """Return current queue entries."""
 
-        return self.session.query(LearningQueueEntry)
+        statement = (
+            select(LearningQueueEntry)
+            .where(LearningQueueEntry.ingested_at.is_(None))
+            .order_by(LearningQueueEntry.created_at.desc())
+        )
+        return list(self.session.scalars(statement))
 
     def validate_entry(self, entry_id: int) -> Optional[LearningQueueEntry]:
         """Mark a queue entry as validated."""
@@ -74,6 +79,8 @@ class LearningService:
         if not entry:
             return None
         entry.validated = True
+        entry.validated_at = utc_now()
+        entry.updated_at = utc_now()
         self.session.commit()
         logger.info("learning_entry_validated", extra={"entry_id": entry_id})
         record_audit_event(
@@ -95,9 +102,10 @@ class LearningService:
         """Embed validated queue entries and push them into the vector store."""
 
         statement = select(LearningQueueEntry).where(LearningQueueEntry.validated.is_(True))
+        statement = statement.where(LearningQueueEntry.ingested_at.is_(None))
         if entry_ids is not None:
             statement = statement.where(LearningQueueEntry.id.in_(entry_ids))
-        entries = self.session.scalars(statement)
+        entries = list(self.session.scalars(statement))
         if not entries:
             logger.info("learning_no_validated_entries", extra={"entry_ids": entry_ids or []})
             return 0
@@ -134,8 +142,10 @@ class LearningService:
 
         vector_store.add_embeddings(embeddings, metadatas)
 
+        ingested_at = utc_now()
         for entry in entries:
-            self.session.delete(entry)
+            entry.ingested_at = ingested_at
+            entry.updated_at = ingested_at
 
         self.session.commit()
         logger.info("learning_entries_ingested", extra={"count": len(entries)})

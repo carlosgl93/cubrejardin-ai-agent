@@ -1,10 +1,16 @@
 """Supabase client initialization for backend (service role)."""
 
-from functools import lru_cache
+from __future__ import annotations
 
-from supabase import create_client, Client
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 
 from config.settings import get_settings
+
+if TYPE_CHECKING:
+    from supabase import Client
+else:
+    Client = Any
 
 
 @lru_cache
@@ -15,5 +21,7 @@ def get_supabase_client() -> Client:
     server-to-server operations like webhook handlers that
     don't have a user JWT context.
     """
+    from supabase import create_client
+
     settings = get_settings()
     return create_client(settings.supabase_url, settings.supabase_service_role_key)

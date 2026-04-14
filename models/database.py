@@ -1,106 +1,134 @@
-"""In-memory database models mimicking SQLAlchemy interface."""
+"""SQLAlchemy database models and session helpers."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, TypeAlias
 
-T = TypeVar("T", bound="BaseModel")
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, create_engine, text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from config import settings
 
 
 def utc_now() -> datetime:
+    """Return current UTC datetime."""
+
     return datetime.now(timezone.utc)
 
 
-@dataclass
-class BaseModel:
-    id: int = field(init=False)
-    created_at: datetime = field(default_factory=utc_now)
-    updated_at: datetime = field(default_factory=utc_now)
-
-    def assign_id(self, identifier: int) -> None:
-        self.id = identifier
+_PK_TYPE = BigInteger().with_variant(Integer, "sqlite")
+_JSON_TYPE = JSON().with_variant(JSONB, "postgresql")
 
 
-@dataclass
-class Conversation(BaseModel):
-    user_number: str = ""
-    role: str = ""
-    message: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    last_interaction_at: Optional[datetime] = None
+class Base(DeclarativeBase):
+    """Base declarative class for SQLAlchemy models."""
 
 
-@dataclass
-class Escalation(BaseModel):
-    conversation_id: int = 0
-    status: str = "pending"
-    handoff_type: str = "to_human"  # indica si fue a humano o de vuelta al bot
-    metadata: Dict[str, Any] = field(default_factory=dict)  # detalles de la escalada
-    timestamp: datetime = field(default_factory=utc_now)  # cuándo ocurrió
-    notes: Optional[str] = None  # comentarios opcionales
+class Conversation(Base):
+    """Persisted inbound/outbound conversation message."""
+
+    __tablename__ = "conversations"
+    __table_args__ = (
+        Index(
+            "conversations_tenant_message_id_uidx",
+            "tenant_id",
+            "message_id",
+            unique=True,
+            postgresql_where=text("message_id is not null"),
+            sqlite_where=text("message_id is not null"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(_PK_TYPE, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    user_number: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column("metadata", _JSON_TYPE, nullable=False, default=dict)
+    message_id: Mapped[str | None] = mapped_column(Text, index=True)
+    last_interaction_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
-@dataclass
-class LearningQueueEntry(BaseModel):
-    question: str = ""
-    answer: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+class Escalation(Base):
+    """Persisted handoff/escalation record."""
+
+    __tablename__ = "escalations"
+
+    id: Mapped[int] = mapped_column(_PK_TYPE, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"))
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    handoff_type: Mapped[str] = mapped_column(Text, nullable=False, default="to_human")
+    payload: Mapped[dict[str, Any]] = mapped_column("metadata", _JSON_TYPE, nullable=False, default=dict)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
-@dataclass
-class KnowledgeBaseDocument(BaseModel):
-    title: str = ""
-    content: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+class LearningQueueEntry(Base):
+    """Validated human answers waiting to be ingested into RAG."""
+
+    __tablename__ = "learning_queue"
+
+    id: Mapped[int] = mapped_column(_PK_TYPE, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"))
+    user_message: Mapped[str] = mapped_column("question", Text, nullable=False)
+    human_answer: Mapped[str] = mapped_column("answer", Text, nullable=False)
+    validated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    payload: Mapped[dict[str, Any]] = mapped_column("metadata", _JSON_TYPE, nullable=False, default=dict)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    validated_by: Mapped[str | None] = mapped_column(String(36))
+    ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
-class InMemorySession:
-    """Very small in-memory session to simulate ORM behavior."""
+class AuditLog(Base):
+    """Application audit trail entry."""
 
-    storage: Dict[Type[BaseModel], List[BaseModel]] = {}
-    counters: Dict[Type[BaseModel], int] = {}
+    __tablename__ = "audit_logs"
 
-    def add(self, instance: BaseModel) -> None:
-        cls = type(instance)
-        bucket = self.storage.setdefault(cls, [])
-        counter = self.counters.setdefault(cls, 0) + 1
-        self.counters[cls] = counter
-        instance.assign_id(counter)
-        bucket.append(instance)
-
-    def commit(self) -> None:
-        pass
-
-    def refresh(self, instance: BaseModel) -> None:
-        pass
-
-    def delete(self, instance: BaseModel) -> None:
-        cls = type(instance)
-        bucket = self.storage.get(cls, [])
-        self.storage[cls] = [item for item in bucket if item.id != instance.id]
-
-    def get(self, model: Type[T], identifier: int) -> Optional[T]:
-        bucket = self.storage.get(model, [])
-        for item in bucket:
-            if item.id == identifier:
-                return item  # type: ignore[return-value]
-        return None
-
-    def query(self, model: Type[T]) -> List[T]:
-        return list(self.storage.get(model, []))  # type: ignore[return-value]
-
-    def close(self) -> None:
-        pass
+    id: Mapped[int] = mapped_column(_PK_TYPE, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[str | None] = mapped_column(Text)
+    payload: Mapped[dict[str, Any]] = mapped_column(_JSON_TYPE, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
-def SessionLocal() -> InMemorySession:
-    return InMemorySession()
+def _create_engine():
+    database_url = settings.database_url
+    engine_kwargs: dict[str, Any] = {"pool_pre_ping": True}
+
+    if database_url.startswith("sqlite"):
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+        if ":memory:" in database_url:
+            engine_kwargs["poolclass"] = StaticPool
+
+    return create_engine(database_url, **engine_kwargs)
 
 
-class Base:
-    metadata = None
+engine = _create_engine()
+_SessionFactory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, class_=Session)
+DatabaseSession: TypeAlias = Session
+InMemorySession = Session
 
 
-engine = None
+def SessionLocal() -> DatabaseSession:
+    """Return a database session."""
+
+    return _SessionFactory()
+
+
+def reset_database() -> None:
+    """Recreate mapped tables for tests/local validation."""
+
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)

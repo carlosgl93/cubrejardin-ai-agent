@@ -92,7 +92,7 @@ async def test_incremental_learning_flow(tmp_path) -> None:
     """Validate handoff, learning ingestion, and retrieval."""
 
     index_path = tmp_path / "index.json"
-    vector_store = VectorStoreService(index_path=str(index_path), backend="local")
+    vector_store = VectorStoreService(index_path=str(index_path), backend="local", tenant_id="tenant-a")
     session = SessionLocal()
     whatsapp_service = DummyWhatsAppService()
     orchestrator = AgentOrchestrator(
@@ -101,6 +101,7 @@ async def test_incremental_learning_flow(tmp_path) -> None:
         vector_store=vector_store,
         whatsapp_service=whatsapp_service,  # type: ignore[arg-type]
         template_service=TemplateService(whatsapp_service=whatsapp_service),  # type: ignore[arg-type]
+        tenant_id="tenant-a",
     )
 
     response = await orchestrator.process_message("+123", "Necesito ayuda con mi pedido")
@@ -121,7 +122,7 @@ async def test_incremental_learning_flow(tmp_path) -> None:
         human_answer="Esta es la respuesta humana validada",
     )
 
-    queue_entries = session.query(LearningQueueEntry)
+    queue_entries = session.query(LearningQueueEntry).all()
     assert queue_entries and getattr(queue_entries[0], "validated", False) is False
 
     learning_service = LearningService(session)
@@ -133,7 +134,9 @@ async def test_incremental_learning_flow(tmp_path) -> None:
         entry_ids=[entry_id],
     )
     assert ingested == 1
-    assert not session.query(LearningQueueEntry)
+    persisted_entry = session.get(LearningQueueEntry, entry_id)
+    assert persisted_entry is not None
+    assert persisted_entry.ingested_at is not None
 
     follow_up = await orchestrator.process_message("+123", "Necesito ayuda con mi pedido")
     assert "respuesta humana validada" in follow_up.message.lower()
