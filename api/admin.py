@@ -10,10 +10,11 @@ from agents.handoff_agent import HandoffAgent
 from api.dependencies import (
     get_db,
     get_openai_service,
-    get_vector_store,
     get_whatsapp_service,
 )
-from models.database import Conversation, InMemorySession, KnowledgeBaseDocument, LearningQueueEntry
+from models.database import Conversation, DatabaseSession
+from services.audit_service import record_audit_event
+from services.document_ingestion import ingest_document
 from services.learning_service import LearningService
 from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
@@ -30,28 +31,38 @@ def healthcheck() -> dict:
 
 @router.post("/knowledge-base")
 def add_document(
+    tenant_id: str,
     title: str,
     content: str,
     metadata: dict | None = None,
-    db: InMemorySession = Depends(get_db),
-    vector_store: VectorStoreService = Depends(get_vector_store),
     openai_service: OpenAIService = Depends(get_openai_service),
 ) -> dict:
     """Add document to knowledge base."""
 
-    document = KnowledgeBaseDocument(title=title, content=content, metadata=metadata or {})
-    db.add(document)
-    db.commit()
-    embedding_response = openai_service.embed(input_texts=[content])
-    embedding = embedding_response["data"][0]["embedding"]
-    vector_store.add_embeddings([embedding], [{"title": title, "content": content, "id": document.id}])
-    return {"id": document.id}
+    vector_store = VectorStoreService(tenant_id=tenant_id)
+    result = ingest_document(
+        tenant_id=tenant_id,
+        title=title,
+        content=content,
+        file_type="text",
+        metadata=metadata,
+        openai_service=openai_service,
+        vector_store=vector_store,
+    )
+    record_audit_event(
+        tenant_id=tenant_id,
+        event_type="knowledge_base_document_added",
+        entity_type="document",
+        entity_id=result["ids"][0] if result["ids"] else None,
+        payload={"title": result["title"], "chunks": result["chunks"]},
+    )
+    return result
 
 
 @router.post("/handoff/to-human")
 async def handoff_to_human(
     conversation_id: int,
-    db: InMemorySession = Depends(get_db),
+    db: DatabaseSession = Depends(get_db),
     whatsapp_service: WhatsAppService = Depends(get_whatsapp_service),
     openai_service: OpenAIService = Depends(get_openai_service),
 ) -> dict:
@@ -72,7 +83,7 @@ async def handoff_to_human(
 @router.post("/handoff/to-bot")
 async def handoff_to_bot(
     conversation_id: int,
-    db: InMemorySession = Depends(get_db),
+    db: DatabaseSession = Depends(get_db),
     whatsapp_service: WhatsAppService = Depends(get_whatsapp_service),
     openai_service: OpenAIService = Depends(get_openai_service),
 ) -> dict:
@@ -91,7 +102,7 @@ async def handoff_to_bot(
 
 
 @router.get("/learning-queue")
-def list_learning_queue(db: InMemorySession = Depends(get_db)) -> List[dict]:
+def list_learning_queue(db: DatabaseSession = Depends(get_db)) -> List[dict]:
     """List learning queue entries."""
 
     service = LearningService(db)
@@ -103,7 +114,7 @@ def list_learning_queue(db: InMemorySession = Depends(get_db)) -> List[dict]:
             "user_message": entry.user_message,
             "human_answer": entry.human_answer,
             "validated": entry.validated,
-            "metadata": entry.metadata,
+            "metadata": entry.payload,
         }
         for entry in entries
     ]
@@ -112,9 +123,8 @@ def list_learning_queue(db: InMemorySession = Depends(get_db)) -> List[dict]:
 @router.post("/learning/{entry_id}/validate")
 def validate_learning_entry(
     entry_id: int,
-    db: InMemorySession = Depends(get_db),
+    db: DatabaseSession = Depends(get_db),
     openai_service: OpenAIService = Depends(get_openai_service),
-    vector_store: VectorStoreService = Depends(get_vector_store),
 ) -> dict:
     """Validate and ingest a human-provided learning entry."""
 
@@ -122,6 +132,7 @@ def validate_learning_entry(
     entry = service.validate_entry(entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Learning entry not found")
+    vector_store = VectorStoreService(tenant_id=entry.tenant_id)
     ingested = service.ingest_validated_learning(
         openai_service=openai_service,
         vector_store=vector_store,

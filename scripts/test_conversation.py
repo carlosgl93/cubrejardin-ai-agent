@@ -61,7 +61,7 @@ async def main() -> None:
     orchestrator = AgentOrchestrator(
         session=session,
         openai_service=OpenAIService(),
-        vector_store=VectorStoreService(),
+        vector_store=VectorStoreService(backend="local"),
         whatsapp_service=whatsapp_stub,  # type: ignore[arg-type]
         template_service=TemplateService(whatsapp_service=whatsapp_stub),  # type: ignore[arg-type]
     )

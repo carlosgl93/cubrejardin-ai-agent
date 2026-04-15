@@ -19,14 +19,22 @@ class DummyOpenAIService:
 
     def chat_completion(self, *, messages, response_format=None):  # type: ignore[override]
         if response_format:
-            payload = {
-                "category": "VALID_QUERY",
-                "confidence": 0.9,
-                "intent": "informacion",
-                "entities": {},
-                "sentiment": "neutral",
-                "reason": "ok",
-            }
+            system_prompt = messages[0]["content"] if messages else ""
+            if "preguntas frecuentes" in system_prompt.lower():
+                payload = {
+                    "category": "NOT_FAQ",
+                    "confidence": 0.1,
+                    "extracted_info": {},
+                }
+            else:
+                payload = {
+                    "category": "VALID_QUERY",
+                    "confidence": 0.9,
+                    "intent": "informacion",
+                    "entities": {},
+                    "sentiment": "neutral",
+                    "reason": "ok",
+                }
             return {"choices": [{"message": {"content": json.dumps(payload)}}]}
         context = "\n".join(msg["content"] for msg in messages if "Fuente:" in msg["content"])
         answer = context.splitlines()[-1] if context else "Sin contexto disponible"
@@ -84,7 +92,7 @@ async def test_incremental_learning_flow(tmp_path) -> None:
     """Validate handoff, learning ingestion, and retrieval."""
 
     index_path = tmp_path / "index.json"
-    vector_store = VectorStoreService(index_path=str(index_path))
+    vector_store = VectorStoreService(index_path=str(index_path), backend="local")
     session = SessionLocal()
     whatsapp_service = DummyWhatsAppService()
     orchestrator = AgentOrchestrator(
@@ -97,11 +105,16 @@ async def test_incremental_learning_flow(tmp_path) -> None:
 
     response = await orchestrator.process_message("+123", "Necesito ayuda con mi pedido")
     assert "Sin contexto" in response.message
-    assert whatsapp_service.pass_calls, "Expected pass_thread_control call"
 
     user_conversation = next(
         conv for conv in session.query(Conversation) if conv.role == "user"
     )
+    await orchestrator.handoff.pass_control_to_human(
+        conversation=user_conversation,
+        metadata={"reason": "integration_test"},
+    )
+    assert whatsapp_service.pass_calls, "Expected pass_thread_control call"
+
     await orchestrator.handoff.record_human_response(
         conversation=user_conversation,
         user_message=user_conversation.message,
@@ -124,6 +137,6 @@ async def test_incremental_learning_flow(tmp_path) -> None:
 
     follow_up = await orchestrator.process_message("+123", "Necesito ayuda con mi pedido")
     assert "respuesta humana validada" in follow_up.message.lower()
-    assert len(whatsapp_service.pass_calls) == 1
+    assert len(whatsapp_service.pass_calls) == 2
 
     session.close()

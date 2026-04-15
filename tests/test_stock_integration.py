@@ -138,7 +138,7 @@ class TestStockAgent:
 class TestMercadoFielService:
     """Test Mercado Fiel API integration."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio("asyncio")
     async def test_execute_stock_webhook_success(self, mercadofiel_service):
         """Test successful stock webhook call."""
         with patch("httpx.AsyncClient") as mock_client:
@@ -164,7 +164,7 @@ class TestMercadoFielService:
             assert result["success"] is True
             assert "Stock agregado" in result["response"]
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio("asyncio")
     async def test_execute_stock_webhook_error(self, mercadofiel_service):
         """Test failed stock webhook call."""
         with patch("httpx.AsyncClient") as mock_client:
@@ -187,7 +187,7 @@ class TestMercadoFielService:
             assert result["success"] is False
             assert "Error del servidor" in result["response"]
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio("asyncio")
     async def test_execute_stock_webhook_timeout(self, mercadofiel_service):
         """Test timeout handling."""
         with patch("httpx.AsyncClient") as mock_client:
@@ -208,7 +208,7 @@ class TestMercadoFielService:
             assert result["success"] is False
             assert "Tiempo de espera agotado" in result["response"]
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio("asyncio")
     async def test_check_supplier_permissions_authorized(self, mercadofiel_service):
         """Test authorized supplier check."""
         with patch("httpx.AsyncClient") as mock_client:
@@ -223,7 +223,7 @@ class TestMercadoFielService:
             is_authorized = await mercadofiel_service.check_supplier_permissions("+1234567890")
             assert is_authorized is True
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio("asyncio")
     async def test_check_supplier_permissions_unauthorized(self, mercadofiel_service):
         """Test unauthorized supplier check."""
         with patch("httpx.AsyncClient") as mock_client:
@@ -242,14 +242,14 @@ class TestMercadoFielService:
 class TestStockIntegration:
     """Integration tests for full stock workflow."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio("asyncio")
     async def test_full_stock_add_workflow(self):
         """Test complete stock add workflow from message to response."""
         # This would require a running Mercado Fiel API
         # For now, we'll skip this or mock the entire flow
         pass
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio("asyncio")
     async def test_guardian_detects_stock_operation(self):
         """Test that Guardian correctly classifies stock messages."""
         # This would test the Guardian agent integration

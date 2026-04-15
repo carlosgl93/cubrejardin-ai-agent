@@ -2,39 +2,23 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from api.dependencies import get_openai_service
 from api.tenant_context import TenantContext, get_tenant_context
 from config.supabase import get_supabase_client
+from services.document_ingestion import ingest_document
 from services.openai_service import OpenAIService
+from services.vector_store import VectorStoreService
 from utils import logger
 
 router = APIRouter()
-
-CHUNK_SIZE = 1500  # characters per chunk
-CHUNK_OVERLAP = 200
 
 
 class CreateDocumentRequest(BaseModel):
     title: str
     content: str
-
-
-def _chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
-    """Split text into overlapping chunks."""
-    if len(text) <= chunk_size:
-        return [text]
-    chunks: List[str] = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunks.append(text[start:end])
-        start = end - overlap
-    return chunks
 
 
 @router.get("")
@@ -87,41 +71,22 @@ async def create_document(
     if not title or not content:
         raise HTTPException(status_code=400, detail="Title and content are required")
 
-    sb = get_supabase_client()
-    chunks = _chunk_text(content)
-
-    rows = []
-    for i, chunk in enumerate(chunks):
-        embedding_response = openai_service.embed(input_texts=[chunk])
-        embedding = embedding_response["data"][0]["embedding"]
-
-        rows.append(
-            {
-                "tenant_id": ctx.tenant_id,
-                "title": title if len(chunks) == 1 else f"{title} (part {i + 1})",
-                "content": chunk,
-                "file_type": "text",
-                "embedding": embedding,
-                "metadata": {
-                    "source_title": title,
-                    "chunk_index": i,
-                    "total_chunks": len(chunks),
-                },
-            }
-        )
-
-    result = sb.table("documents").insert(rows).execute()
+    vector_store = VectorStoreService(tenant_id=ctx.tenant_id)
+    result = ingest_document(
+        tenant_id=ctx.tenant_id,
+        title=title,
+        content=content,
+        file_type="text",
+        openai_service=openai_service,
+        vector_store=vector_store,
+    )
 
     logger.info(
         "document_created",
-        extra={"tenant_id": ctx.tenant_id, "title": title, "chunks": len(chunks)},
+        extra={"tenant_id": ctx.tenant_id, "title": title, "chunks": result["chunks"]},
     )
 
-    return {
-        "title": title,
-        "chunks": len(chunks),
-        "ids": [r["id"] for r in result.data],
-    }
+    return result
 
 
 @router.delete("/{document_id}")
@@ -147,10 +112,7 @@ async def delete_document(
     meta = doc.data[0].get("metadata") or {}
     source_title = meta.get("source_title", doc.data[0]["title"])
 
-    # Delete all chunks with the same source_title for this tenant
-    sb.table("documents").delete().eq("tenant_id", ctx.tenant_id).contains(
-        "metadata", {"source_title": source_title}
-    ).execute()
+    VectorStoreService(tenant_id=ctx.tenant_id).delete_documents_by_source_title(source_title)
 
     logger.info(
         "document_deleted",

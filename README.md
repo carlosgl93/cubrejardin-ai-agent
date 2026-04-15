@@ -44,7 +44,7 @@ flowchart TD
     B -->|SPAM/SENSITIVE/OFF_TOPIC| C[Respuesta automática]
     B -->|ESCALATION_REQUEST| H[Agente Handoff]
     B -->|VALID_QUERY/GREETING| D[Agente RAG]
-    D -->|Consulta Vector Store| E[FAISS - FAQs]
+    D -->|RPC match_documents| E[(Postgres/Supabase + pgvector)]
     D -->|Consultas DB| F[(PostgreSQL)]
     H -->|Notificación| I[(Ticketing Webhook)]
     D -->|Confianza Baja| H
@@ -54,7 +54,7 @@ flowchart TD
         K[Agente Humano] --> L[Learning Queue]
         L --> M[Validación]
         M -->|Aprobado| E
-        M -->|Registro| F
+        M -->|Registro operativo| F
     end
 ```
 
@@ -63,21 +63,21 @@ flowchart TD
 - **Webhook Meta** (`api/webhooks.py`): valida firma `X-Hub-Signature-256`, idempotencia por `message_id`, marca mensajes como leídos y delega al orquestador.
 - **Agente Guardian** (`agents/guardian_agent.py`): clasifica mensajes (VALID_QUERY, SPAM, SENSITIVE, etc.) aplicando reglas explícitas para fraudes y solicitudes financieras.
 - **Agente FAQ** (`agents/faq_agent.py`): identifica preguntas frecuentes y genera respuestas manteniendo el tono y estilo exacto de las respuestas originales.
-- **Agente RAG** (`agents/rag_agent.py`): recupera contexto desde FAISS con las FAQs y responde. Loguea confianza (`rag_answer`) y fuentes.
+- **Agente RAG** (`agents/rag_agent.py`): recupera contexto desde `documents` vía `match_documents` filtrado por `tenant_id` y responde. Loguea confianza (`rag_answer`) y fuentes.
 - **Agente Handoff** (`agents/handoff_agent.py`): notifica al usuario, envía plantilla y ejecuta `pass_thread_control` cuando corresponde.
 - **TemplateService** (`services/template_service.py`): fallback automático fuera de la ventana de 24 h usando plantillas aprobadas (`session_expired`, `handoff_notification`, etc.).
 - **WhatsAppService** (`services/whatsapp_service.py`): cliente async para la Cloud API v21.0 con backoff, validación SHA-256 y tracking de la última interacción.
-- **Persistencia**: Postgres (SQLAlchemy/InMemory) para conversaciones y cola de aprendizaje, FAISS para embeddings de FAQs, Redis para futuros workers (cola de mensajes).
+- **Persistencia**: Postgres/SQLAlchemy para conversaciones y cola de aprendizaje, Supabase/Postgres + pgvector para RAG multiempresa, Redis para futuros workers (cola de mensajes).
 
 ### Componentes Clave
 
 - **Webhook Meta** (`api/webhooks.py`): valida firma `X-Hub-Signature-256`, idempotencia por `message_id`, marca mensajes como leídos y delega al orquestador.
 - **Agente Guardian** (`agents/guardian_agent.py`): clasifica mensajes (VALID_QUERY, SPAM, SENSITIVE, etc.) aplicando reglas explícitas para fraudes y solicitudes financieras.
-- **Agente RAG** (`agents/rag_agent.py`): recupera contexto desde FAISS y responde. Loguea confianza (`rag_answer`) y fuentes.
+- **Agente RAG** (`agents/rag_agent.py`): recupera contexto desde `documents` vía RPC `match_documents` y responde. Loguea confianza (`rag_answer`) y fuentes.
 - **Agente Handoff** (`agents/handoff_agent.py`): notifica al usuario, envía plantilla y ejecuta `pass_thread_control` cuando corresponde.
 - **TemplateService** (`services/template_service.py`): fallback automático fuera de la ventana de 24 h usando plantillas aprobadas (`session_expired`, `handoff_notification`, etc.).
 - **WhatsAppService** (`services/whatsapp_service.py`): cliente async para la Cloud API v21.0 con backoff, validación SHA-256 y tracking de la última interacción.
-- **Persistencia**: Postgres (SQLAlchemy/InMemory) para conversaciones y cola de aprendizaje, FAISS para embeddings, Redis para futuros workers (cola de mensajes).
+- **Persistencia**: Postgres/SQLAlchemy para conversaciones y cola de aprendizaje, Supabase/Postgres + pgvector para embeddings/documentos, Redis para futuros workers (cola de mensajes).
 
 ---
 
@@ -109,6 +109,10 @@ Configura `.env` a partir de `.env.example`.
 | `MERCADO_FIEL_API_KEY` | Token de autenticación para Mercado Fiel API |
 | `DATABASE_URL` | (Docker Compose) URL para Postgres |
 | `REDIS_URL` | (Docker Compose) URL para Redis |
+| `SUPABASE_URL` | URL del proyecto Supabase usado por el RAG |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key para ingesta/búsqueda server-to-server |
+| `VECTOR_BACKEND` | Backend de vectores (`pgvector` en producción, `local` solo para test/dev) |
+| `MATCH_DOCUMENTS_RPC` | Nombre del RPC SQL para búsqueda semántica |
 
 > **Tip:** no expongas credenciales en repositorios ni logs.
 
@@ -121,8 +125,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Carga documentos a FAISS
-python scripts/load_documents.py
+# Ejecuta las migraciones SQL en tu Postgres/Supabase
+# sql/migrations/001_enable_pgvector.sql
+# sql/migrations/002_documents_and_match_documents.sql
+
+# Carga documentos al tenant en pgvector
+python scripts/load_documents.py --tenant-id <tenant_uuid>
 
 # Levanta la API
 uvicorn main:app --reload
@@ -150,7 +158,7 @@ Servicios levantados:
 Carga documentos desde el host (con el contenedor en marcha):
 
 ```bash
-docker compose exec api bash -lc 'python scripts/load_documents.py'
+docker compose exec api bash -lc 'python scripts/load_documents.py --tenant-id <tenant_uuid>'
 ```
 
 ---
@@ -195,7 +203,7 @@ docker compose exec api bash -lc 'python scripts/load_documents.py'
 
 | Script | Descripción |
 | --- | --- |
-| `scripts/load_documents.py` | Ingresa todos los Markdown en `data/documents/` al vector store y DB |
+| `scripts/load_documents.py` | Ingresa Markdown por tenant directamente a `documents` en pgvector |
 | `scripts/test_conversation.py` | Simulación interactiva del flujo completo (usa stubs locales) |
 | `scripts/setup.py` | Placeholder (no-op) para compatibilidad en entornos legacy |
 
@@ -243,8 +251,8 @@ docker compose exec api bash -lc 'python scripts/load_documents.py'
 ## Aprendizaje Incremental
 
 1. Las respuestas humanas se guardan en la tabla `LearningQueueEntry`.
-2. Valida y publica con `POST /admin/learning/{entry_id}/validate` (o mediante scripts personalizados).
-3. Corre `python scripts/load_documents.py` o tu pipeline ETL para reindexar FAISS.
+2. Valida y publica con `POST /admin/learning/{entry_id}/validate`.
+3. Las entradas validadas se insertan directamente en `documents` con embedding y `tenant_id`; no hay reindexación local en producción.
 
 ---
 

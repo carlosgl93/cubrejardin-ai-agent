@@ -47,7 +47,7 @@ TEMPLATE_MAPPING={"handoff":"handoff_notification"}
 DATABASE_URL=sqlite:///./test.db
 ```
 
-### 3. Cargar FAQs al Vector Store
+### 3. Ejecutar migraciones y cargar FAQs en pgvector
 
 **IMPORTANTE**: Este paso es crucial para que el bot funcione correctamente.
 
@@ -55,15 +55,19 @@ DATABASE_URL=sqlite:///./test.db
 # Asegúrate de estar en el entorno virtual
 source venv/bin/activate
 
-# Cargar documentos (FAQs) al vector store
-python scripts/load_documents.py
+# Ejecuta primero las migraciones SQL en tu Postgres/Supabase
+# sql/migrations/001_enable_pgvector.sql
+# sql/migrations/002_documents_and_match_documents.sql
+
+# Cargar documentos (FAQs) al tenant en pgvector
+python scripts/load_documents.py --tenant-id <tenant_uuid>
 ```
 
 Este comando:
 - Lee todos los archivos `.md` en `data/documents/`
 - Incluye el nuevo archivo `faqs.md` con todas las preguntas frecuentes
 - Genera embeddings usando OpenAI
-- Almacena los embeddings en FAISS (`data/vector_store/`)
+- Inserta los chunks directamente en `documents` (`tenant_id`, `metadata`, `embedding`)
 
 ### 4. Iniciar el Servidor
 
@@ -92,13 +96,13 @@ cubrejardin-bot/
 │   │   ├── faqs.md                    # ← NUEVO: Preguntas frecuentes
 │   │   ├── catalogo_productos.md
 │   │   └── ...
-│   └── vector_store/
-│       ├── index.faiss                # ← Generado por load_documents.py
-│       └── index.faiss.meta.json
+│   └── documents/                     # ← Fuente Markdown para ingesta
+├── sql/
+│   └── migrations/                    # ← Migraciones pgvector/documents
 ├── agents/
 │   ├── faq_agent.py                   # ← NUEVO: Maneja FAQs
 │   ├── guardian_agent.py              # Clasifica mensajes
-│   ├── rag_agent.py                   # Busca en vector store
+│   ├── rag_agent.py                   # Busca en pgvector vía RPC
 │   └── orchestrator.py                # Coordina agentes
 ├── config/
 │   └── prompts.py                     # Prompts actualizados para FAQs
@@ -143,8 +147,8 @@ pip install -r requirements.txt
 ### El bot no responde correctamente a FAQs
 
 ```bash
-# Recarga el vector store
-python scripts/load_documents.py
+# Reingesta documentos del tenant
+python scripts/load_documents.py --tenant-id <tenant_uuid>
 ```
 
 ### Error en webhooks
@@ -157,7 +161,7 @@ python scripts/load_documents.py
 
 - Verifica que el archivo `data/documents/faqs.md` tenga los textos exactos
 - Verifica que `config/prompts.py` tenga las instrucciones de preservar ortografía
-- Recarga el vector store: `python scripts/load_documents.py`
+- Reingesta el tenant: `python scripts/load_documents.py --tenant-id <tenant_uuid>`
 
 ## Desarrollo
 
@@ -165,7 +169,7 @@ python scripts/load_documents.py
 
 1. Edita `data/documents/faqs.md`
 2. Añade la nueva pregunta y respuesta
-3. Recarga el vector store: `python scripts/load_documents.py`
+3. Reingesta el tenant: `python scripts/load_documents.py --tenant-id <tenant_uuid>`
 4. Prueba con un mensaje de WhatsApp
 
 ### Modificar Categorías de FAQs
@@ -199,7 +203,7 @@ docker-compose logs api | grep "faq_response_generated"
 - `guardian_classification` - Cómo se clasificó el mensaje
 - `faq_intent_identified` - Qué categoría de FAQ se identificó
 - `faq_response_generated` - Respuesta generada
-- `rag_answer` - Resultado de búsqueda en vector store
+- `rag_answer` - Resultado de búsqueda en pgvector
 
 ## Siguientes Pasos
 
