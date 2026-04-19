@@ -141,12 +141,15 @@ class HandoffAgent:
             logger.warning("telegram_not_configured")
             return None
 
+        site_url = getattr(settings, "site_url", "https://sgcloud.cl")
+        conversation_link = f"{site_url}/conversations?number={user_number}"
         text = (
             f"🔔 <b>Nuevo handoff</b>\n\n"
             f"👤 Usuario: <code>{user_number}</code>\n"
             f"💬 Último mensaje: {last_message}\n"
             f"📌 Razón: {reason}\n\n"
-            f"↩️ Responde a este mensaje para contestarle al usuario."
+            f'👉 <a href="{conversation_link}">Abrir conversación</a>\n'
+            f"↩️ O responde a este mensaje desde Telegram."
         )
         tg = TelegramService()
         try:
