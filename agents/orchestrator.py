@@ -128,7 +128,7 @@ class AgentOrchestrator:
 
         if guardian_result.category == "ESCALATION_REQUEST":
             conv = await self._store_message(user_number, "system", "Escalación solicitada")
-            message_text = await self.handoff.escalate(conv, user_number, metadata={"reason": "user_request"})
+            message_text = await self.handoff.escalate(conv, user_number, metadata={"reason": "user_request"}, tenant_id=self.tenant_id or "", phone_id=self.whatsapp_service.phone_id or "", last_message=message)
             return AgentResponse(
                 message=message_text,
                 intent="handoff",
@@ -247,7 +247,7 @@ class AgentOrchestrator:
         if rag_response.confidence < 0.5 and guardian_result.category == "VALID_QUERY":
             conv = await self._store_message(user_number, "system", "Confianza baja, escalando")
             try:
-                await self.handoff.escalate(conv, user_number, metadata={"reason": "low_confidence"})
+                await self.handoff.escalate(conv, user_number, metadata={"reason": "low_confidence"}, tenant_id=self.tenant_id or "", phone_id=self.whatsapp_service.phone_id or "", last_message=message)
             except Exception as exc:
                 logger.warning(
                     "escalation_failed_gracefully",
@@ -285,14 +285,9 @@ class AgentOrchestrator:
     async def has_processed_message(self, message_id: str) -> bool:
         """Return True if the inbound message id has already been processed."""
 
-        statement = (
-            select(Conversation.id)
-            .where(Conversation.role == "user")
-            .where(Conversation.message_id == message_id)
-            .order_by(desc(Conversation.id))
-            .limit(1)
-        )
-        if self.tenant_id:
-            statement = statement.where(Conversation.tenant_id == self.tenant_id)
-
-        return self.session.scalar(statement) is not None
+        entries = self.session.query(Conversation)
+        for entry in entries:
+            if entry.role == "user" and entry.message_id == message_id:
+                if not self.tenant_id or entry.tenant_id == self.tenant_id:
+                    return True
+        return False

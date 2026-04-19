@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import httpx
+
 import hashlib
 import hmac
 from datetime import datetime, timezone
@@ -17,6 +19,7 @@ from config.supabase import get_supabase_client
 from models.database import SessionLocal
 from services.facebook_messenger_service import FacebookMessengerService
 from services.openai_service import OpenAIService
+from services.telegram_service import TelegramService
 from services.template_service import TemplateService
 from services.vector_store import VectorStoreService
 from services.whatsapp_service import WhatsAppService
@@ -81,6 +84,22 @@ def _resolve_tenant_credentials(phone_number_id: str) -> Optional[dict]:
         .select("tenant_id, phone_number_id, access_token")
         .eq("phone_number_id", phone_number_id)
         .eq("status", "active")
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
+    """Return active handoff for a given WhatsApp number if one exists."""
+    sb = get_supabase_client()
+    result = (
+        sb.table("active_handoffs")
+        .select("*")
+        .eq("whatsapp_number", whatsapp_number)
+        .eq("tenant_id", tenant_id)
+        .eq("status", "active")
+        .order("created_at", desc=True)
         .limit(1)
         .execute()
     )
@@ -212,6 +231,25 @@ async def whatsapp_webhook(
                             continue
                         if await orchestrator.has_processed_message(msg.id):
                             continue
+
+                        # If user has an active handoff, forward to Telegram agent
+                        active_handoff = _get_active_handoff(user_number, tenant_id)
+                        if active_handoff:
+                            tg_fwd = TelegramService()
+                            try:
+                                fwd_text = (
+                                    f"💬 <b>Usuario</b> <code>{user_number}</code>:\n{body_text}"
+                                )
+                                await tg_fwd.send_message(
+                                    active_handoff["telegram_chat_id"],
+                                    fwd_text,
+                                    reply_to_message_id=active_handoff.get("telegram_message_id"),
+                                )
+                            finally:
+                                await tg_fwd.close()
+                            delivery_results.append({"tenant_id": tenant_id, "user": user_number, "status": "forwarded_to_agent"})
+                            continue
+
                         logger.info(
                             "whatsapp_message_received",
                             extra={

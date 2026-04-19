@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional
 
+from config import get_settings
+from config.supabase import get_supabase_client
 from models.database import Conversation, Escalation, InMemorySession
 from services.learning_service import LearningService
 from services.openai_service import OpenAIService
+from services.telegram_service import TelegramService
 from services.whatsapp_service import WhatsAppService
 from utils import logger
+
+settings = get_settings()
 
 
 class HandoffAgent:
@@ -53,12 +58,11 @@ class HandoffAgent:
                 recipient_id=conversation.user_number,
                 metadata=metadata or {},
             )
-        except Exception as exc:  # pragma: no cover
-            logger.error(
+        except Exception as exc:
+            logger.warning(
                 "handoff_pass_control_error",
                 extra={"conversation_id": conversation.id, "error": str(exc)},
             )
-            raise
         logger.info(
             "handoff_pass_control_success",
             extra={"conversation_id": conversation.id, "escalation_id": escalation.id},
@@ -78,7 +82,7 @@ class HandoffAgent:
                 recipient_id=conversation.user_number,
                 metadata=metadata or {},
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:
             logger.error(
                 "handoff_take_control_error",
                 extra={"conversation_id": conversation.id, "error": str(exc)},
@@ -95,10 +99,7 @@ class HandoffAgent:
             self.session.commit()
 
         await asyncio.to_thread(_resolve)
-        logger.info(
-            "handoff_take_control_success",
-            extra={"conversation_id": conversation.id},
-        )
+        logger.info("handoff_take_control_success", extra={"conversation_id": conversation.id})
 
     async def record_human_response(
         self,
@@ -124,18 +125,77 @@ class HandoffAgent:
             extra={"conversation_id": conversation.id, "entry_id": entry.id},
         )
 
+    async def _notify_telegram(
+        self,
+        *,
+        user_number: str,
+        last_message: str,
+        reason: str,
+        tenant_id: str,
+        phone_id: str,
+    ) -> Optional[int]:
+        """Send handoff notification to Telegram agent and persist active handoff."""
+
+        chat_id = settings.telegram_agent_chat_id
+        if not chat_id or not settings.telegram_bot_token:
+            logger.warning("telegram_not_configured")
+            return None
+
+        text = (
+            f"🔔 <b>Nuevo handoff</b>\n\n"
+            f"👤 Usuario: <code>{user_number}</code>\n"
+            f"💬 Último mensaje: {last_message}\n"
+            f"📌 Razón: {reason}\n\n"
+            f"↩️ Responde a este mensaje para contestarle al usuario."
+        )
+        tg = TelegramService()
+        try:
+            result = await tg.send_message(chat_id, text)
+            message_id = result.get("message_id")
+        finally:
+            await tg.close()
+
+        # Persist active handoff in Supabase
+        try:
+            sb = get_supabase_client()
+            sb.table("active_handoffs").insert({
+                "tenant_id": tenant_id,
+                "whatsapp_number": user_number,
+                "telegram_chat_id": chat_id,
+                "telegram_message_id": message_id,
+                "wa_service_phone_id": phone_id,
+                "status": "active",
+            }).execute()
+        except Exception as exc:
+            logger.error("handoff_supabase_persist_error", extra={"error": str(exc)})
+
+        logger.info("telegram_handoff_notified", extra={"user": user_number, "message_id": message_id})
+        return message_id
+
     async def escalate(
         self,
         conversation: Conversation,
         user_number: str,
         metadata: Optional[Dict[str, Any]] = None,
+        *,
+        tenant_id: str = "",
+        phone_id: str = "",
+        last_message: str = "",
     ) -> str:
-        """Escalate conversation and notify user."""
+        """Escalate conversation and notify user + Telegram agent."""
 
         details = metadata or {"reason": "low_confidence"}
+        reason = details.get("reason", "low_confidence")
         message = (
             "Gracias por tu paciencia. Un especialista humano revisará tu caso y te contactará en menos de 2 horas."
         )
         await self.whatsapp_service.send_text_message(user_number, message)
         await self.pass_control_to_human(conversation=conversation, metadata=details)
+        await self._notify_telegram(
+            user_number=user_number,
+            last_message=last_message or "(sin mensaje)",
+            reason=reason,
+            tenant_id=tenant_id,
+            phone_id=phone_id,
+        )
         return message

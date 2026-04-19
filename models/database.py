@@ -30,6 +30,9 @@ class Conversation(BaseModel):
     message: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     last_interaction_at: Optional[datetime] = None
+    message_id: Optional[str] = None
+    tenant_id: Optional[str] = None
+    payload: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -44,9 +47,12 @@ class Escalation(BaseModel):
 
 @dataclass
 class LearningQueueEntry(BaseModel):
-    question: str = ""
-    answer: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    tenant_id: Optional[str] = None
+    conversation_id: int = 0
+    user_message: str = ""
+    human_answer: str = ""
+    validated: bool = False
+    payload: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -94,6 +100,8 @@ class InMemorySession:
     def close(self) -> None:
         pass
 
+
+DatabaseSession = InMemorySession
 
 def SessionLocal() -> InMemorySession:
     return InMemorySession()

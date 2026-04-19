@@ -47,11 +47,11 @@ class WhatsAppService:
 
         await self._client.aclose()
 
-    async def send_text_message(self, to: str, body: str, *, preview_url: bool = True) -> Dict[str, Any]:
+    async def send_text_message(self, to: str, body: str, *, preview_url: bool = True, skip_window_check: bool = False) -> Dict[str, Any]:
         """Send a text message within the 24-hour session window."""
 
         sanitized = self._sanitize_number(to)
-        if not self.is_within_24h_window(sanitized):
+        if not skip_window_check and not self.is_within_24h_window(sanitized):
             raise OutsideMessagingWindowError(sanitized)
         payload = {
             "messaging_product": "whatsapp",

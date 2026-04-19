@@ -87,6 +87,10 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = Field("", validation_alias="SUPABASE_SERVICE_ROLE_KEY")
     supabase_jwt_secret: str = Field("", validation_alias="SUPABASE_JWT_SECRET")
 
+    # 🤖 Telegram
+    telegram_bot_token: str = Field("", validation_alias="TELEGRAM_BOT_TOKEN")
+    telegram_agent_chat_id: str = Field("", validation_alias="TELEGRAM_AGENT_CHAT_ID")
+
     @field_validator("debug", mode="before")
     @classmethod
     def parse_debug_flag(cls, value):  # type: ignore[no-untyped-def]
