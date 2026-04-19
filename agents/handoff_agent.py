@@ -141,15 +141,38 @@ class HandoffAgent:
             logger.warning("telegram_not_configured")
             return None
 
+        # Fetch last messages for context
+        history_text = ""
+        try:
+            from config.supabase import get_supabase_client as _get_sb
+            _sb = _get_sb()
+            _hist = (
+                _sb.table("conversations")
+                .select("role, message")
+                .eq("tenant_id", tenant_id)
+                .eq("user_number", user_number)
+                .order("created_at", desc=True)
+                .limit(6)
+                .execute()
+            )
+            if _hist.data:
+                rows = list(reversed(_hist.data))
+                lines_hist = []
+                for r in rows:
+                    prefix = "🧑" if r["role"] == "user" else "🤖"
+                    lines_hist.append(f"{prefix} {r['message'][:120]}")
+                history_text = "\n".join(lines_hist)
+        except Exception:
+            pass
         site_url = getattr(settings, "site_url", "https://sgcloud.cl")
         conversation_link = f"{site_url}/conversations?number={user_number}"
         text = (
             f"🔔 <b>Nuevo handoff</b>\n\n"
             f"👤 Usuario: <code>{user_number}</code>\n"
-            f"💬 Último mensaje: {last_message}\n"
-            f"📌 Razón: {reason}\n\n"
-            f'👉 <a href="{conversation_link}">Abrir conversación</a>\n'
-            f"↩️ O responde a este mensaje desde Telegram."
+            f"📌 Razón: {reason}\n"
+            + (f"\n📜 <b>Conversación previa:</b>\n{history_text}\n" if history_text else "")
+            + f"\n👉 <a href='{conversation_link}'>Abrir conversación</a>\n"
+            + f"↩️ O responde a este mensaje desde Telegram."
         )
         tg = TelegramService()
         try:
