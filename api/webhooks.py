@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from agents.orchestrator import AgentOrchestrator
@@ -160,12 +161,12 @@ async def verify_webhook(
     hub_mode: str = Query(alias="hub.mode"),
     hub_challenge: str = Query(alias="hub.challenge"),
     hub_verify_token: str = Query(alias="hub.verify_token"),
-) -> int:
+) -> str:
     """Meta verification callback."""
 
     if hub_mode == "subscribe" and hub_verify_token == settings.whatsapp_webhook_verify_token:
         logger.info("whatsapp_webhook_verified")
-        return int(hub_challenge)
+        return PlainTextResponse(hub_challenge)
     logger.warning("whatsapp_webhook_verify_failed")
     raise HTTPException(status_code=403, detail="Invalid verify token")
 
@@ -411,7 +412,7 @@ async def verify_facebook_webhook(
 
     if hub_mode == "subscribe" and hub_verify_token == settings.facebook_messenger_verify_token:
         logger.info("facebook_messenger_webhook_verified")
-        return int(hub_challenge)
+        return PlainTextResponse(hub_challenge)
     logger.warning("facebook_messenger_webhook_verify_failed")
     raise HTTPException(status_code=403, detail="Invalid verify token")
 
