@@ -258,6 +258,14 @@ async def whatsapp_webhook(
                                 )
                             finally:
                                 await tg_fwd.close()
+                            sb_conv = get_supabase_client()
+                            sb_conv.table("conversations").insert({
+                                "tenant_id": tenant_id,
+                                "user_number": user_number,
+                                "role": "user",
+                                "message": body_text,
+                                "metadata": {"source": "whatsapp", "during_handoff": True},
+                            }).execute()
                             sb_touch = get_supabase_client()
                             sb_touch.table("active_handoffs").update({"updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", active_handoff["id"]).execute()
                             delivery_results.append({"tenant_id": tenant_id, "user": user_number, "status": "forwarded_to_agent"})
