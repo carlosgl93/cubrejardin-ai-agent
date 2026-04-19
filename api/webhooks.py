@@ -6,7 +6,7 @@ import httpx
 
 import hashlib
 import hmac
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -25,6 +25,8 @@ from services.template_service import TemplateService
 from services.vector_store import VectorStoreService
 from services.whatsapp_service import WhatsAppService
 from utils import OutsideMessagingWindowError, logger
+
+HANDOFF_EXPIRY_HOURS = 8
 
 router = APIRouter()
 settings = get_settings()
@@ -92,7 +94,7 @@ def _resolve_tenant_credentials(phone_number_id: str) -> Optional[dict]:
 
 
 def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
-    """Return active handoff for a given WhatsApp number if one exists."""
+    """Return active handoff for a given WhatsApp number if one exists, auto-expiring stale ones."""
     sb = get_supabase_client()
     result = (
         sb.table("active_handoffs")
@@ -104,7 +106,15 @@ def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
         .limit(1)
         .execute()
     )
-    return result.data[0] if result.data else None
+    if not result.data:
+        return None
+    handoff = result.data[0]
+    updated_at = datetime.fromisoformat(handoff["updated_at"].replace("Z", "+00:00"))
+    if datetime.now(timezone.utc) - updated_at > timedelta(hours=HANDOFF_EXPIRY_HOURS):
+        sb.table("active_handoffs").update({"status": "expired"}).eq("id", handoff["id"]).execute()
+        logger.info("handoff_auto_expired", extra={"handoff_id": handoff["id"], "whatsapp_number": whatsapp_number})
+        return None
+    return handoff
 
 
 class WhatsAppMessage(BaseModel):
@@ -248,6 +258,8 @@ async def whatsapp_webhook(
                                 )
                             finally:
                                 await tg_fwd.close()
+                            sb_touch = get_supabase_client()
+                            sb_touch.table("active_handoffs").update({"updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", active_handoff["id"]).execute()
                             delivery_results.append({"tenant_id": tenant_id, "user": user_number, "status": "forwarded_to_agent"})
                             continue
 

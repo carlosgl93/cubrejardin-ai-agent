@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Request
 
 from config import get_settings
@@ -12,6 +14,8 @@ from utils import logger
 
 router = APIRouter()
 settings = get_settings()
+
+HANDOFF_EXPIRY_HOURS = 8
 
 
 def _resolve_handoff_by_reply(reply_to_id: int) -> dict | None:
@@ -41,6 +45,16 @@ def _resolve_latest_handoff(chat_id: str) -> dict | None:
     return result.data[0] if result.data else None
 
 
+def _close_handoff(handoff_id: str, status: str = "closed") -> None:
+    sb = get_supabase_client()
+    sb.table("active_handoffs").update({"status": status}).eq("id", handoff_id).execute()
+
+
+def _touch_handoff(handoff_id: str) -> None:
+    sb = get_supabase_client()
+    sb.table("active_handoffs").update({"updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", handoff_id).execute()
+
+
 @router.post("/telegram")
 async def telegram_webhook(request: Request) -> dict:
     """Receive Telegram update from agent and forward reply to WhatsApp user."""
@@ -61,6 +75,8 @@ async def telegram_webhook(request: Request) -> dict:
     if text.startswith("/"):
         if text == "/handoffs":
             await _list_active_handoffs(chat_id)
+        elif text.startswith("/done"):
+            await _cmd_done(chat_id, reply_to)
         return {"status": "command"}
 
     # Find active handoff: prefer reply-to match, fall back to latest
@@ -84,6 +100,7 @@ async def telegram_webhook(request: Request) -> dict:
     )
     try:
         await wa_service.send_text_message(handoff["whatsapp_number"], text, skip_window_check=True)
+        _touch_handoff(handoff["id"])
         logger.info(
             "telegram_handoff_reply_forwarded",
             extra={"to": handoff["whatsapp_number"], "handoff_id": handoff["id"]},
@@ -92,6 +109,29 @@ async def telegram_webhook(request: Request) -> dict:
         await wa_service.close()
 
     return {"status": "ok"}
+
+
+async def _cmd_done(chat_id: str, reply_to: dict | None) -> None:
+    tg = TelegramService()
+    try:
+        handoff = None
+        if reply_to:
+            handoff = _resolve_handoff_by_reply(reply_to["message_id"])
+        if not handoff:
+            handoff = _resolve_latest_handoff(chat_id)
+
+        if not handoff:
+            await tg.send_message(chat_id, "✅ No hay handoffs activos.")
+            return
+
+        _close_handoff(handoff["id"])
+        await tg.send_message(
+            chat_id,
+            f"✅ Handoff cerrado para <code>{handoff['whatsapp_number']}</code>. El bot retoma la conversación.",
+        )
+        logger.info("handoff_closed_by_agent", extra={"handoff_id": handoff["id"]})
+    finally:
+        await tg.close()
 
 
 async def _list_active_handoffs(chat_id: str) -> None:
