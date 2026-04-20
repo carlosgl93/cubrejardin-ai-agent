@@ -14,6 +14,7 @@ class AuthenticatedUser(BaseModel):
     sub: str  # user UUID from Supabase auth.users
     email: Optional[str] = None
     role: Optional[str] = None
+    is_super_admin: bool = False
 
 
 async def get_current_user(
@@ -51,8 +52,10 @@ async def get_current_user(
             detail=f"Invalid or expired token: {e}",
         )
 
+    meta = user.user_metadata or {}
     return AuthenticatedUser(
         sub=user.id,
         email=user.email,
         role=user.role,
+        is_super_admin=bool(meta.get("super_admin", False)),
     )

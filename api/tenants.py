@@ -92,3 +92,81 @@ async def get_my_tenant(
 
     t = result.data
     return TenantResponse(id=t["id"], name=t["name"], slug=t["slug"], plan=t.get("plan", "free"))
+
+
+class BotConfigRequest(BaseModel):
+    system_prompt: str | None = None
+    greeting: str | None = None
+    handoff_trigger: str | None = None
+    business_hours: dict | None = None
+
+
+class BotConfigResponse(BaseModel):
+    id: str
+    tenant_id: str
+    system_prompt: str | None
+    greeting: str | None
+    handoff_trigger: str | None
+    business_hours: dict
+
+
+@router.get("/config", response_model=BotConfigResponse)
+async def get_bot_config(ctx: TenantContext = Depends(get_tenant_context)):
+    """Get bot configuration for the tenant."""
+    sb = get_supabase_client()
+    result = (
+        sb.table("tenant_bot_config")
+        .select("*")
+        .eq("tenant_id", ctx.tenant_id)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        # Return empty defaults — config not yet saved
+        return BotConfigResponse(
+            id="",
+            tenant_id=ctx.tenant_id,
+            system_prompt=None,
+            greeting=None,
+            handoff_trigger=None,
+            business_hours={"enabled": False, "timezone": "America/Santiago", "schedule": {}},
+        )
+    row = result.data[0]
+    return BotConfigResponse(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        system_prompt=row.get("system_prompt"),
+        greeting=row.get("greeting"),
+        handoff_trigger=row.get("handoff_trigger"),
+        business_hours=row.get("business_hours") or {},
+    )
+
+
+@router.put("/config", response_model=BotConfigResponse)
+async def upsert_bot_config(
+    body: BotConfigRequest,
+    ctx: TenantContext = Depends(get_tenant_context),
+):
+    """Create or update bot configuration. Owner/admin only."""
+    if ctx.role not in ("owner", "admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
+
+    sb = get_supabase_client()
+    payload = {
+        "tenant_id": ctx.tenant_id,
+        **{k: v for k, v in body.model_dump().items() if v is not None},
+    }
+    result = (
+        sb.table("tenant_bot_config")
+        .upsert(payload, on_conflict="tenant_id")
+        .execute()
+    )
+    row = result.data[0]
+    return BotConfigResponse(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        system_prompt=row.get("system_prompt"),
+        greeting=row.get("greeting"),
+        handoff_trigger=row.get("handoff_trigger"),
+        business_hours=row.get("business_hours") or {},
+    )
