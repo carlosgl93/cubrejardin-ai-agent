@@ -26,7 +26,7 @@ from services.vector_store import VectorStoreService
 from services.whatsapp_service import WhatsAppService
 from utils import OutsideMessagingWindowError, logger
 
-HANDOFF_EXPIRY_HOURS = 8
+HANDOFF_EXPIRY_HOURS = 2
 
 router = APIRouter()
 settings = get_settings()
@@ -111,7 +111,11 @@ def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
     handoff = result.data[0]
     updated_at = datetime.fromisoformat(handoff["updated_at"].replace("Z", "+00:00"))
     if datetime.now(timezone.utc) - updated_at > timedelta(hours=HANDOFF_EXPIRY_HOURS):
-        sb.table("active_handoffs").update({"status": "expired"}).eq("id", handoff["id"]).execute()
+        sb.table("active_handoffs").update({
+            "status": "expired",
+            "closed_at": datetime.now(timezone.utc).isoformat(),
+            "closed_by": "auto_expired",
+        }).eq("id", handoff["id"]).execute()
         logger.info("handoff_auto_expired", extra={"handoff_id": handoff["id"], "whatsapp_number": whatsapp_number})
         return None
     return handoff
@@ -267,7 +271,10 @@ async def whatsapp_webhook(
                                 "metadata": {"source": "whatsapp", "during_handoff": True},
                             }).execute()
                             sb_touch = get_supabase_client()
-                            sb_touch.table("active_handoffs").update({"updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", active_handoff["id"]).execute()
+                            sb_touch.table("active_handoffs").update({
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                                "message_count": (active_handoff.get("message_count") or 0) + 1,
+                            }).eq("id", active_handoff["id"]).execute()
                             delivery_results.append({"tenant_id": tenant_id, "user": user_number, "status": "forwarded_to_agent"})
                             continue
 

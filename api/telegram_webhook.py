@@ -15,7 +15,7 @@ from utils import logger
 router = APIRouter()
 settings = get_settings()
 
-HANDOFF_EXPIRY_HOURS = 8
+HANDOFF_EXPIRY_HOURS = 2
 
 
 def _resolve_handoff_by_reply(reply_to_id: int) -> dict | None:
@@ -45,14 +45,22 @@ def _resolve_latest_handoff(chat_id: str) -> dict | None:
     return result.data[0] if result.data else None
 
 
-def _close_handoff(handoff_id: str, status: str = "closed") -> None:
+def _close_handoff(handoff_id: str, status: str = "closed", closed_by: str = "agent_telegram") -> None:
+    from datetime import datetime, timezone
     sb = get_supabase_client()
-    sb.table("active_handoffs").update({"status": status}).eq("id", handoff_id).execute()
+    sb.table("active_handoffs").update({
+        "status": status,
+        "closed_at": datetime.now(timezone.utc).isoformat(),
+        "closed_by": closed_by,
+    }).eq("id", handoff_id).execute()
 
 
-def _touch_handoff(handoff_id: str) -> None:
+def _touch_handoff(handoff_id: str, handoff: dict | None = None) -> None:
     sb = get_supabase_client()
-    sb.table("active_handoffs").update({"updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", handoff_id).execute()
+    update: dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if handoff is not None:
+        update["message_count"] = (handoff.get("message_count") or 0) + 1
+    sb.table("active_handoffs").update(update).eq("id", handoff_id).execute()
 
 
 @router.post("/telegram")
@@ -100,7 +108,7 @@ async def telegram_webhook(request: Request) -> dict:
     )
     try:
         await wa_service.send_text_message(handoff["whatsapp_number"], text, skip_window_check=True)
-        _touch_handoff(handoff["id"])
+        _touch_handoff(handoff["id"], handoff)
         logger.info(
             "telegram_handoff_reply_forwarded",
             extra={"to": handoff["whatsapp_number"], "handoff_id": handoff["id"]},
