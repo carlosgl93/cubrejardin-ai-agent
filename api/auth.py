@@ -6,6 +6,7 @@ from fastapi import HTTPException, Header, status
 from pydantic import BaseModel
 
 from config.supabase import get_supabase_client
+from config.settings import get_settings
 
 
 class AuthenticatedUser(BaseModel):
@@ -52,10 +53,11 @@ async def get_current_user(
             detail=f"Invalid or expired token: {e}",
         )
 
-    meta = user.user_metadata or {}
+    settings = get_settings()
+    admin_emails = [e.strip() for e in settings.super_admin_emails.split(",") if e.strip()]
     return AuthenticatedUser(
         sub=user.id,
         email=user.email,
         role=user.role,
-        is_super_admin=bool(meta.get("super_admin", False)),
+        is_super_admin=bool(user.email and user.email in admin_emails),
     )

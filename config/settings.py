@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field("", validation_alias="TELEGRAM_BOT_TOKEN")
     telegram_agent_chat_id: str = Field("", validation_alias="TELEGRAM_AGENT_CHAT_ID")
 
+    # Comma-separated emails of super-admins who can access the backoffice
+    super_admin_emails: str = Field("", validation_alias="SUPER_ADMIN_EMAILS")
+
     @field_validator("debug", mode="before")
     @classmethod
     def parse_debug_flag(cls, value):  # type: ignore[no-untyped-def]
