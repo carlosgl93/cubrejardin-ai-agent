@@ -21,6 +21,7 @@ from .guardian_agent import GuardianAgent
 from .handoff_agent import HandoffAgent
 from .rag_agent import RAGAgent
 from .faq_agent import FAQAgent
+from services.tenant_config_service import get_tenant_bot_config, TenantBotConfig
 
 
 class AgentOrchestrator:
@@ -50,8 +51,11 @@ class AgentOrchestrator:
         self.whatsapp_service = whatsapp_service
         self.template_service = template_service
         self.mercadofiel_service = mercadofiel_service or MercadoFielService()
-        self.guardian = GuardianAgent(openai_service)
-        self.rag = RAGAgent(openai_service, self.vector_store)
+        self._bot_config: TenantBotConfig = (
+            get_tenant_bot_config(tenant_id) if tenant_id else TenantBotConfig()
+        )
+        self.guardian = GuardianAgent(openai_service, handoff_trigger=self._bot_config.handoff_trigger)
+        self.rag = RAGAgent(openai_service, self.vector_store, system_prompt=self._bot_config.system_prompt)
         self.faq = FAQAgent(openai_service)
         self.handoff = HandoffAgent(
             openai_service=openai_service,
@@ -137,7 +141,7 @@ class AgentOrchestrator:
             )
 
         if guardian_result.category == "GREETING":
-            response = "¡Hola! ¿En qué puedo ayudarte hoy?"
+            response = self._bot_config.greeting or "¡Hola! ¿En qué puedo ayudarte hoy?"
             await self._store_message(user_number, "assistant", response)
             return AgentResponse(
                 message=response,

@@ -14,9 +14,9 @@ from utils.helpers import sanitize_text
 class GuardianAgent:
     """Input guardrail agent."""
 
-    def __init__(self, openai_service: OpenAIService) -> None:
+    def __init__(self, openai_service: OpenAIService, handoff_trigger: str | None = None) -> None:
         self.openai_service = openai_service
-        self.system_prompt = guardian_prompt()
+        self.system_prompt = guardian_prompt(handoff_trigger=handoff_trigger)
 
     def classify(self, message: str) -> GuardianResult:
         """Classify inbound message and extract metadata."""

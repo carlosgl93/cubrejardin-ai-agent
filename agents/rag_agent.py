@@ -14,10 +14,10 @@ from utils.helpers import build_response_message
 class RAGAgent:
     """Agent responsible for retrieving and answering queries."""
 
-    def __init__(self, openai_service: OpenAIService, vector_store: VectorStoreService) -> None:
+    def __init__(self, openai_service: OpenAIService, vector_store: VectorStoreService, system_prompt: str | None = None) -> None:
         self.openai_service = openai_service
         self.vector_store = vector_store
-        self.system_prompt = rag_prompt()
+        self.system_prompt = rag_prompt(system_prompt=system_prompt)
 
     def _build_context(self, query: str) -> Tuple[List[Dict[str, str]], List[Dict[str, str]], float]:
         """Retrieve relevant documents for query."""
