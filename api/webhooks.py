@@ -297,7 +297,7 @@ async def whatsapp_webhook(
                             await wa_service.mark_as_read(msg.id)
                         except Exception as mark_read_error:
                             logger.warning(
-                                "whatsapp_mark_read_failed",
+                                f"whatsapp_mark_read_failed: {mark_read_error}",
                                 extra={"message_id": msg.id, "error": str(mark_read_error)},
                             )
 
@@ -336,14 +336,13 @@ async def whatsapp_webhook(
                         except httpx.HTTPStatusError as send_error:
                             error_code, tech_msg, user_msg = _extract_meta_error(send_error)
                             logger.error(
-                                "whatsapp_send_failed",
+                                f"whatsapp_send_failed: code={error_code} — {tech_msg}",
                                 extra={
                                     "tenant_id": tenant_id,
                                     "user": user_number,
                                     "message_id": msg.id,
                                     "meta_error_code": error_code,
                                     "meta_error": tech_msg,
-                                    "user_message": user_msg,
                                 },
                             )
                             delivery_results.append({
@@ -355,12 +354,43 @@ async def whatsapp_webhook(
                                 "meta_error": tech_msg,
                                 "user_message": user_msg,
                             })
-                            # Try to notify the user in Spanish, unless it's a token/auth error
-                            if error_code not in _META_AUTH_ERRORS:
+                            # On auth errors: mark credential as revoked and alert admin
+                            if error_code in _META_AUTH_ERRORS:
+                                try:
+                                    get_supabase_client().table("tenant_whatsapp_credentials") \
+                                        .update({"status": "revoked"}) \
+                                        .eq("tenant_id", tenant_id).execute()
+                                except Exception:
+                                    pass
+                                try:
+                                    tg = TelegramService()
+                                    await tg.send_message(
+                                        settings.telegram_agent_chat_id,
+                                        f"🚨 WhatsApp auth error — tenant {tenant_id}\n"
+                                        f"Código: {error_code}\n"
+                                        f"Error: {tech_msg}\n\n"
+                                        f"El tenant necesita reconectar su cuenta en /onboarding",
+                                    )
+                                    await tg.close()
+                                except Exception:
+                                    pass
+                            else:
+                                # Non-auth error: notify user in Spanish and alert admin
                                 try:
                                     await wa_service.send_text_message(user_number, user_msg)
                                 except Exception:
-                                    pass  # Best-effort — don't crash on fallback failure
+                                    pass
+                                try:
+                                    tg = TelegramService()
+                                    await tg.send_message(
+                                        settings.telegram_agent_chat_id,
+                                        f"⚠️ WhatsApp send error — {user_number} (tenant {tenant_id})\n"
+                                        f"Código: {error_code}\n"
+                                        f"Error: {tech_msg}",
+                                    )
+                                    await tg.close()
+                                except Exception:
+                                    pass
                         except Exception as send_error:
                             logger.error(
                                 "whatsapp_send_failed",
