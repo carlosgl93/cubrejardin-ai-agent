@@ -12,76 +12,137 @@ to one of the user's Facebook Pages instead of WABA + phone. Flow:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from api.tenant_context import TenantContext, get_tenant_context
 from channels.instagram import GRAPH_BASE
+from config.settings import get_settings
 
 router = APIRouter(prefix="/api/instagram", tags=["instagram"])
 
 
-def _graph_post(path: str, params: dict) -> dict[str, Any]:
-    """GET helper against Graph API. Wrapped for tests.
+class ExchangeInstagramCodeRequest(BaseModel):
+    auth_code: str
+    redirect_uri: str = ""
 
-    Meta's auth/code-exchange endpoints are GET with query params; using GET
-    here for parity with the /oauth/access_token endpoint shape.
+
+class ExchangeInstagramCodeResponse(BaseModel):
+    ig_user_id: str
+    page_id: str
+    status: str
+    token_expires_at: str
+
+
+async def _graph_get(path: str, params: dict) -> dict[str, Any]:
+    """Async GET helper against Graph API. Wrapped for tests.
+
+    Meta's auth/code-exchange endpoints are GET with query params.
     """
-    resp = httpx.get(f"{GRAPH_BASE}{path}", params=params, timeout=15)
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(f"{GRAPH_BASE}{path}", params=params)
     resp.raise_for_status()
     return resp.json()
 
 
-def _supabase_upsert_ig_creds(tenant_id: str, row: dict) -> None:
-    """Mockable indirection — real impl writes via supabase client."""
+def _scrub_tokens(resp: dict) -> dict:
+    """Remove secrets from a token response before persistence."""
+    scrubbed = dict(resp)
+    scrubbed.pop("access_token", None)
+    return scrubbed
+
+
+def _supabase_client():
+    """Service-role Supabase client (bypasses RLS).
+
+    ``get_supabase_client`` already uses the service role key — appropriate
+    for server-to-server writes.
+    """
     from config.supabase import get_supabase_client
 
-    supabase = get_supabase_client()
+    return get_supabase_client()
+
+
+def _supabase_fetch_ig_creds(tenant_id: str) -> Optional[dict]:
+    supabase = _supabase_client()
+    res = (
+        supabase.table("tenant_instagram_credentials")
+        .select("*")
+        .eq("tenant_id", tenant_id)
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    return res.data
+
+
+def _supabase_update_ig_creds(tenant_id: str, updates: dict) -> None:
+    supabase = _supabase_client()
+    supabase.table("tenant_instagram_credentials").update(updates).eq(
+        "tenant_id", tenant_id
+    ).execute()
+
+
+def _supabase_upsert_ig_creds(tenant_id: str, row: dict) -> None:
+    """Mockable indirection — real impl writes via supabase client."""
+    supabase = _supabase_client()
     supabase.table("tenant_instagram_credentials").upsert(
         {"tenant_id": tenant_id, **row},
         on_conflict="tenant_id",
     ).execute()
 
 
-@router.post("/exchange")
+@router.post(
+    "/exchange",
+    response_model=ExchangeInstagramCodeResponse,
+)
 async def exchange(
-    payload: dict,
+    payload: ExchangeInstagramCodeRequest,
     ctx: TenantContext = Depends(get_tenant_context),
 ):
-    code = payload.get("auth_code")
-    redirect_uri = payload.get("redirect_uri", "")
+    code = payload.auth_code
+    redirect_uri = payload.redirect_uri
     if not code:
         raise HTTPException(status_code=400, detail="auth_code required")
-
-    from config.settings import get_settings
 
     settings = get_settings()
     app_id = settings.facebook_target_app_id
     app_secret = settings.facebook_app_secret
 
     # 1. Exchange code -> short-lived user token
-    token_resp = _graph_post("/oauth/access_token", {
+    token_resp = await _graph_get("/oauth/access_token", {
         "client_id": app_id,
         "client_secret": app_secret,
         "redirect_uri": redirect_uri,
         "code": code,
     })
+    if "access_token" not in token_resp:
+        raise HTTPException(
+            status_code=502,
+            detail="Meta token exchange failed",
+        )
     short_token = token_resp["access_token"]
 
     # 2. Exchange short -> long-lived (~60 days)
-    long_resp = _graph_post("/oauth/access_token", {
+    long_resp = await _graph_get("/oauth/access_token", {
         "grant_type": "fb_exchange_token",
         "client_id": app_id,
         "client_secret": app_secret,
         "fb_exchange_token": short_token,
     })
+    if "access_token" not in long_resp:
+        raise HTTPException(
+            status_code=502,
+            detail="Meta long-lived token exchange failed",
+        )
     long_token = long_resp["access_token"]
     expires_in = long_resp.get("expires_in", 5184000)
 
     # 3. Resolve pages user manages
-    me_resp = _graph_post("/me/accounts", {"access_token": long_token})
+    me_resp = await _graph_get("/me/accounts", {"access_token": long_token})
     pages = me_resp.get("data") or []
     if not pages:
         raise HTTPException(
@@ -89,14 +150,13 @@ async def exchange(
             detail="No Facebook Pages found for this account",
         )
 
-    page_id = pages[0]["id"]
-    page_access_token = pages[0].get("access_token", long_token)
-
     # 4. Find a Page with a linked Instagram Professional account
-    ig_user_id = None
+    ig_user_id: Optional[str] = None
+    page_id: Optional[str] = None
+    page_access_token: Optional[str] = None
     for p in pages:
         try:
-            r = _graph_post(
+            r = await _graph_get(
                 f"/{p['id']}",
                 {
                     "fields": "instagram_business_account",
@@ -123,20 +183,29 @@ async def exchange(
         "ig_user_id": ig_user_id,
         "page_id": page_id,
         "page_access_token": page_access_token,
-        "app_secret": app_secret,
         "status": "active",
         "token_expires_at": expires_at.isoformat(),
         "raw_oauth_response": {
-            "short_token_resp": token_resp,
-            "long_token_resp": long_resp,
+            "short_token_resp": _scrub_tokens(token_resp),
+            "long_token_resp": _scrub_tokens(long_resp),
             "page_id": page_id,
         },
     }
-    _supabase_upsert_ig_creds(ctx.tenant_id, row)
 
-    return {
-        "ig_user_id": ig_user_id,
-        "page_id": page_id,
-        "status": "active",
-        "token_expires_at": row["token_expires_at"],
-    }
+    # Idempotency: if active row exists, narrow update preserves operator edits.
+    existing = _supabase_fetch_ig_creds(ctx.tenant_id)
+    if existing and existing.get("status") == "active":
+        _supabase_update_ig_creds(ctx.tenant_id, {
+            "page_access_token": page_access_token,
+            "token_expires_at": expires_at.isoformat(),
+            "page_id": page_id,
+        })
+    else:
+        _supabase_upsert_ig_creds(ctx.tenant_id, row)
+
+    return ExchangeInstagramCodeResponse(
+        ig_user_id=ig_user_id,
+        page_id=page_id,
+        status="active",
+        token_expires_at=expires_at.isoformat(),
+    )

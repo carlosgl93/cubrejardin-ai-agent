@@ -19,7 +19,7 @@ def test_exchange_endpoint_persists_credentials():
         tenant_name="Test Tenant",
     )
 
-    # The endpoint calls _graph_post multiple times during the IG flow:
+    # The endpoint calls _graph_get multiple times during the IG flow:
     #  1. code -> short-lived user token
     #  2. short -> long-lived user token (with expires_in)
     #  3. /me/accounts to list pages
@@ -37,8 +37,9 @@ def test_exchange_endpoint_persists_credentials():
 
     app.dependency_overrides[get_tenant_context] = override_get_tenant_context
     try:
-        with patch("api.instagram._graph_post", side_effect=graph_responses), \
-             patch("api.instagram._supabase_upsert_ig_creds") as upsert:
+        with patch("api.instagram._graph_get", side_effect=graph_responses), \
+             patch("api.instagram._supabase_upsert_ig_creds") as upsert, \
+             patch("api.instagram._supabase_fetch_ig_creds", return_value=None):
             resp = client.post(
                 "/api/instagram/exchange",
                 json={"auth_code": "AUTH_CODE_XYZ", "redirect_uri": "https://app/cb"},
@@ -52,4 +53,5 @@ def test_exchange_endpoint_persists_credentials():
     assert body["ig_user_id"] == "17841401234567890"
     assert body["page_id"] == "1234567890"
     assert body["status"] == "active"
+    assert body["token_expires_at"]
     upsert.assert_called_once()
