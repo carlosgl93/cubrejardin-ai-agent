@@ -28,7 +28,7 @@ def resolve_tenant_for_whatsapp(payload: dict) -> str:
         supabase.table("tenant_whatsapp_credentials")
         .select("tenant_id")
         .eq("phone_number_id", phone_number_id)
-        .eq("active", True)
+        .eq("status", "active")
         .limit(1)
         .maybe_single()
         .execute()
