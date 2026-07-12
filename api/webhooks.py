@@ -15,6 +15,13 @@ from pydantic import BaseModel, Field
 
 from agents.orchestrator import AgentOrchestrator
 from api.dependencies import get_facebook_messenger_service, get_openai_service, get_orchestrator
+from api.webhooks_helpers import (
+    persist_conversation_message as _persist_conversation_message,
+    resolve_tenant_for_instagram as _resolve_tenant_for_instagram,
+    resolve_tenant_for_whatsapp as _resolve_tenant_for_whatsapp,
+    run_bot_pipeline as _run_bot_pipeline,
+)
+from channels.registry import get_adapter
 from config import get_settings
 from config.supabase import get_supabase_client
 from models.database import SessionLocal
@@ -411,6 +418,75 @@ async def whatsapp_webhook(
                 await wa_service.close()
 
     return {"status": "ok", "results": delivery_results}
+
+
+# ============================================================================
+# Unified webhook router (WhatsApp Business + Instagram)
+# ============================================================================
+
+
+@router.post("")
+async def unified_webhook(
+    request: Request,
+    x_hub_signature_256: str = Header(default=""),
+) -> dict:
+    """Unified entry for ``object: whatsapp-business-account`` and ``object: instagram``.
+
+    Dispatches based on ``payload["object"]`` to the matching channel adapter,
+    persists the inbound message under ``channel=<adapter name>``, and routes
+    the bot reply back through the adapter's ``send_message``.
+    """
+
+    raw_body = await request.body()
+
+    if not settings.skip_webhook_signature_validation:
+        if not _validate_whatsapp_signature(raw_body, x_hub_signature_256):
+            logger.warning("webhook_invalid_signature")
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    object_type = payload.get("object")
+    if object_type == "whatsapp-business-account":
+        channel = "whatsapp"
+        try:
+            tenant_id = _resolve_tenant_for_whatsapp(payload)
+        except (ValueError, KeyError) as exc:
+            logger.warning("webhook_tenant_resolution_failed", extra={"channel": channel, "error": str(exc)})
+            return {"status": "ignored", "reason": "unknown_tenant"}
+    elif object_type == "instagram":
+        channel = "instagram"
+        try:
+            tenant_id = _resolve_tenant_for_instagram(payload)
+        except (ValueError, KeyError) as exc:
+            logger.warning("webhook_tenant_resolution_failed", extra={"channel": channel, "error": str(exc)})
+            return {"status": "ignored", "reason": "unknown_tenant"}
+    else:
+        return {"status": "ignored", "reason": "unsupported_object"}
+
+    adapter = get_adapter(channel)
+    messages = adapter.parse_webhook(payload)
+
+    for msg in messages:
+        _persist_conversation_message(
+            tenant_id=tenant_id,
+            channel=channel,
+            channel_user_id=msg.external_user_id,
+            role="user",
+            message=msg.text,
+            metadata=msg.metadata,
+        )
+        await _run_bot_pipeline(
+            tenant_id=tenant_id,
+            channel=channel,
+            channel_user_id=msg.external_user_id,
+            user_message=msg.text,
+        )
+
+    return {"status": "ok", "count": len(messages), "channel": channel}
 
 
 # ============================================================================

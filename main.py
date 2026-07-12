@@ -24,8 +24,10 @@ app.include_router(api_router)
 # begins serving requests). The registry is treated as immutable after this.
 from channels.registry import register_adapter
 from channels.whatsapp import WhatsAppAdapter
+from channels.instagram import InstagramAdapter
 
 register_adapter(WhatsAppAdapter())
+register_adapter(InstagramAdapter())
 
 
 @app.get("/")
