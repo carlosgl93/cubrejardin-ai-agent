@@ -23,7 +23,7 @@ class ChannelAdapter(Protocol):
         """Refresh an expiring access token. Returns updated credentials."""
         ...
 
-    def send_message(self, recipient_id: str, text: str, **context: Any) -> dict:
+    async def send_message(self, recipient_id: str, text: str, **context: Any) -> dict:
         """Send a text reply. Returns provider message id."""
         ...
 

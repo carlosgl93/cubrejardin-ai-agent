@@ -21,7 +21,7 @@ def test_adapter_protocol_is_runtime_checkable():
 
         def exchange_oauth(self, code, **ctx): return {"access_token": "x"}
         def refresh_token(self, credentials, **ctx): return {"access_token": "y"}
-        def send_message(self, recipient_id, text, **ctx): return {"message_id": "m1"}
+        async def send_message(self, recipient_id, text, **ctx): return {"message_id": "m1"}
         def parse_webhook(self, payload): return []
 
     assert isinstance(FakeAdapter(), ChannelAdapter)
