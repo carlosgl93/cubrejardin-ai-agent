@@ -46,6 +46,27 @@ def _update_creds(tenant_id: str, **updates) -> None:
     ).execute()
 
 
+def _refresh_with_retry(current_token: str, attempts: int = 2) -> dict:
+    """Try refresh once; on transient errors (5xx, network), retry once more."""
+    import time
+    last_err = None
+    for attempt in range(attempts):
+        try:
+            return _refresh_token(current_token)
+        except httpx.HTTPStatusError as e:
+            last_err = e
+            # Retry only on 5xx (server-side blip)
+            if e.response.status_code < 500:
+                raise
+        except httpx.HTTPError as e:
+            last_err = e
+            # Network errors are transient — retry
+        # Wait briefly between retries (linear backoff)
+        if attempt < attempts - 1:
+            time.sleep(1)
+    raise last_err
+
+
 def refresh_due_tokens() -> int:
     """Refresh all IG tokens expiring within 7 days.
     Returns number of tokens refreshed."""
@@ -54,20 +75,20 @@ def refresh_due_tokens() -> int:
         tenant_id = row["tenant_id"]
         current = row["page_access_token"]
         try:
-            result = _refresh_token(current)
-            new_token = result["access_token"]
-            expires_in = result.get("expires_in", 5184000)
-            new_expires = (
-                datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-            ).isoformat()
-            _update_creds(
-                tenant_id,
-                page_access_token=new_token,
-                token_expires_at=new_expires,
-            )
-            count += 1
+            new_token_data = _refresh_with_retry(current)
         except Exception as e:
-            # Mark second failure path: skip after first retry
             _update_creds(tenant_id, status="revoked")
-            print(f"[IG refresh] revoked {tenant_id}: {e}")
+            print(f"[IG refresh] revoked {tenant_id} after retry: {e}")
+            continue
+
+        expires_in = new_token_data.get("expires_in", 5184000)
+        new_expires = (
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        ).isoformat()
+        _update_creds(
+            tenant_id,
+            page_access_token=new_token_data["access_token"],
+            token_expires_at=new_expires,
+        )
+        count += 1
     return count
