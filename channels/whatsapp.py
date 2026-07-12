@@ -1,7 +1,7 @@
 """WhatsApp ChannelAdapter.
 
 Thin shim that wraps the existing ``services.whatsapp_service.WhatsAppService``
-and the token-exchange helpers from ``api.facebook_auth`` so callers can
+and the token-exchange helpers from ``services.facebook_auth`` so callers can
 interact with the WhatsApp channel through the unified ``ChannelAdapter``
 Protocol.
 
@@ -13,8 +13,7 @@ state.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -51,84 +50,22 @@ class WhatsAppAdapter(ChannelAdapter):
         ``context`` must include ``tenant_id``. Optional ``waba_id`` and
         ``phone_number_id`` come from the Embedded Signup callback; when
         omitted the adapter discovers them via the Meta Graph API.
-        """
 
-        from api.facebook_auth import _exchange_code_for_token, _get_waba_info
-        from config.supabase import get_supabase_client
+        Delegates to ``services.facebook_auth.exchange_facebook_code_to_credentials``
+        so the FastAPI route and the adapter share the same implementation.
+        """
+        from services.facebook_auth import exchange_facebook_code_to_credentials
 
         tenant_id = context.get("tenant_id")
         if not tenant_id:
             raise ValueError("`tenant_id` required in context")
 
-        async with httpx.AsyncClient(timeout=30.0) as http:
-            access_token, expires_in = await _exchange_code_for_token(code, http)
-
-            if context.get("waba_id") and context.get("phone_number_id"):
-                waba_info: Dict[str, Any] = {
-                    "waba_id": context["waba_id"],
-                    "phone_number_id": context["phone_number_id"],
-                    "display_phone_number": "",
-                }
-            else:
-                waba_info = await _get_waba_info(access_token, http)
-
-        token_expires_at: Optional[str] = None
-        if expires_in:
-            token_expires_at = (
-                datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-            ).isoformat()
-
-        sb = get_supabase_client()
-        existing = (
-            sb.table("tenant_whatsapp_credentials")
-            .select("status, whatsapp_business_account_id, phone_number_id")
-            .eq("tenant_id", tenant_id)
-            .limit(1)
-            .execute()
+        return await exchange_facebook_code_to_credentials(
+            code=code,
+            tenant_id=tenant_id,
+            waba_id=context.get("waba_id", ""),
+            phone_number_id=context.get("phone_number_id", ""),
         )
-
-        already_active = (
-            existing.data
-            and existing.data[0].get("status") == "active"
-            and existing.data[0].get("phone_number_id")
-        )
-
-        if already_active:
-            update_payload: Dict[str, Any] = {"access_token": access_token}
-            if token_expires_at is not None:
-                update_payload["token_expires_at"] = token_expires_at
-            sb.table("tenant_whatsapp_credentials").update(update_payload).eq(
-                "tenant_id", tenant_id
-            ).execute()
-            saved_waba_id = existing.data[0]["whatsapp_business_account_id"]
-            saved_phone_id = existing.data[0]["phone_number_id"]
-        else:
-            upsert_payload: Dict[str, Any] = {
-                "tenant_id": tenant_id,
-                "access_token": access_token,
-                "whatsapp_business_account_id": waba_info["waba_id"],
-                "phone_number_id": waba_info["phone_number_id"],
-                "status": "active",
-                "raw_oauth_response": {
-                    "waba_id": waba_info["waba_id"],
-                    "phone_number_id": waba_info["phone_number_id"],
-                    "display_phone_number": waba_info.get("display_phone_number", ""),
-                },
-            }
-            if token_expires_at is not None:
-                upsert_payload["token_expires_at"] = token_expires_at
-            sb.table("tenant_whatsapp_credentials").upsert(
-                upsert_payload, on_conflict="tenant_id"
-            ).execute()
-            saved_waba_id = waba_info["waba_id"]
-            saved_phone_id = waba_info["phone_number_id"]
-
-        return {
-            "access_token": access_token,
-            "waba_id": saved_waba_id,
-            "phone_number_id": saved_phone_id,
-            "token_expires_at": token_expires_at,
-        }
 
     def refresh_token(self, credentials: dict, **context: Any) -> dict:
         """Refresh a long-lived WhatsApp access token.
