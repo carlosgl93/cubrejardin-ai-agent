@@ -33,7 +33,11 @@ def test_whatsapp_adapter_parse_webhook_yields_messages():
 
 
 def test_whatsapp_adapter_refresh_token_calls_fb_exchange():
-    with patch.dict("os.environ", {"FACEBOOK_APP_ID": "X", "FACEBOOK_APP_SECRET": "Y"}), \
+    fake_settings = type("S", (), {
+        "facebook_target_app_id": "X",
+        "facebook_app_secret": "Y",
+    })()
+    with patch("channels.whatsapp.get_settings", return_value=fake_settings), \
          patch("httpx.get") as mock_get:
         mock_get.return_value.json.return_value = {
             "access_token": "NEW_TOKEN",
@@ -49,3 +53,5 @@ def test_whatsapp_adapter_refresh_token_calls_fb_exchange():
         params = mock_get.call_args.kwargs["params"]
         assert params["grant_type"] == "fb_exchange_token"
         assert params["fb_exchange_token"] == "OLD_TOKEN"
+        assert params["client_id"] == "X"
+        assert params["client_secret"] == "Y"

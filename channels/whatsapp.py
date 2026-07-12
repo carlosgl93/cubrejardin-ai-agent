@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from channels.base import ChannelAdapter, InboundMessage
+from config.settings import get_settings
 
 
 def _load_tenant_credentials(tenant_id: str) -> Optional[dict]:
@@ -55,7 +56,9 @@ class WhatsAppAdapter(ChannelAdapter):
         from api.facebook_auth import _exchange_code_for_token, _get_waba_info
         from config.supabase import get_supabase_client
 
-        tenant_id = context["tenant_id"]
+        tenant_id = context.get("tenant_id")
+        if not tenant_id:
+            raise ValueError("`tenant_id` required in context")
 
         async with httpx.AsyncClient(timeout=30.0) as http:
             access_token, expires_in = await _exchange_code_for_token(code, http)
@@ -136,10 +139,9 @@ class WhatsAppAdapter(ChannelAdapter):
         https://developers.facebook.com/docs/facebook-login/access-tokens/refreshing
         """
 
-        import os
-
-        app_id = os.environ.get("FACEBOOK_APP_ID")
-        app_secret = os.environ.get("FACEBOOK_APP_SECRET")
+        settings = get_settings()
+        app_id = settings.facebook_target_app_id
+        app_secret = settings.facebook_app_secret
         if not app_id or not app_secret:
             raise RuntimeError("FACEBOOK_APP_ID/SECRET not configured")
 
@@ -179,7 +181,9 @@ class WhatsAppAdapter(ChannelAdapter):
 
         from services.whatsapp_service import WhatsAppService
 
-        tenant_id = context["tenant_id"]
+        tenant_id = context.get("tenant_id")
+        if not tenant_id:
+            raise ValueError("`tenant_id` required in context")
         creds = _load_tenant_credentials(tenant_id)
         if not creds:
             raise ValueError(
