@@ -20,6 +20,13 @@ app.add_middleware(
 
 app.include_router(api_router)
 
+# Register channel adapters exactly once at import time (before any worker
+# begins serving requests). The registry is treated as immutable after this.
+from channels.registry import register_adapter
+from channels.whatsapp import WhatsAppAdapter
+
+register_adapter(WhatsAppAdapter())
+
 
 @app.get("/")
 def root() -> dict:
