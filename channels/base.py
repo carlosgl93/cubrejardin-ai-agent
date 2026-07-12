@@ -19,7 +19,7 @@ class ChannelAdapter(Protocol):
         """Exchange OAuth `code` (from Meta) into channel credentials."""
         ...
 
-    def refresh_token(self, credentials: dict) -> dict:
+    def refresh_token(self, credentials: dict, **context: Any) -> dict:
         """Refresh an expiring access token. Returns updated credentials."""
         ...
 
