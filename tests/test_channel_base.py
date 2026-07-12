@@ -19,7 +19,7 @@ def test_adapter_protocol_is_runtime_checkable():
     class FakeAdapter:
         name = "fake"
 
-        def exchange_oauth(self, code, **ctx): return {"access_token": "x"}
+        async def exchange_oauth(self, code, **ctx): return {"access_token": "x"}
         def refresh_token(self, credentials, **ctx): return {"access_token": "y"}
         async def send_message(self, recipient_id, text, **ctx): return {"message_id": "m1"}
         def parse_webhook(self, payload): return []

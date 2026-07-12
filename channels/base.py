@@ -15,7 +15,7 @@ class InboundMessage:
 class ChannelAdapter(Protocol):
     name: str
 
-    def exchange_oauth(self, code: str, **context: Any) -> dict:
+    async def exchange_oauth(self, code: str, **context: Any) -> dict:
         """Exchange OAuth `code` (from Meta) into channel credentials."""
         ...
 
