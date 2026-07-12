@@ -150,7 +150,8 @@ class HandoffAgent:
                 _sb.table("conversations")
                 .select("role, message")
                 .eq("tenant_id", tenant_id)
-                .eq("user_number", user_number)
+                .eq("channel_user_id", user_number)
+                .eq("channel", "whatsapp")
                 .order("created_at", desc=True)
                 .limit(6)
                 .execute()
@@ -184,7 +185,7 @@ class HandoffAgent:
         # Persist active handoff in Supabase
         try:
             sb = get_supabase_client()
-            sb.table("active_handoffs").insert({
+            sb.table("handoffs").insert({
                 "tenant_id": tenant_id,
                 "whatsapp_number": user_number,
                 "telegram_chat_id": chat_id,

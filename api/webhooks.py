@@ -97,7 +97,7 @@ def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
     """Return active handoff for a given WhatsApp number if one exists, auto-expiring stale ones."""
     sb = get_supabase_client()
     result = (
-        sb.table("active_handoffs")
+        sb.table("handoffs")
         .select("*")
         .eq("whatsapp_number", whatsapp_number)
         .eq("tenant_id", tenant_id)
@@ -111,7 +111,7 @@ def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
     handoff = result.data[0]
     updated_at = datetime.fromisoformat(handoff["updated_at"].replace("Z", "+00:00"))
     if datetime.now(timezone.utc) - updated_at > timedelta(hours=HANDOFF_EXPIRY_HOURS):
-        sb.table("active_handoffs").update({
+        sb.table("handoffs").update({
             "status": "expired",
             "closed_at": datetime.now(timezone.utc).isoformat(),
             "closed_by": "auto_expired",
@@ -265,13 +265,14 @@ async def whatsapp_webhook(
                             sb_conv = get_supabase_client()
                             sb_conv.table("conversations").insert({
                                 "tenant_id": tenant_id,
-                                "user_number": user_number,
+                                "channel": "whatsapp",
+                                "channel_user_id": user_number,
                                 "role": "user",
                                 "message": body_text,
                                 "metadata": {"source": "whatsapp", "during_handoff": True},
                             }).execute()
                             sb_touch = get_supabase_client()
-                            sb_touch.table("active_handoffs").update({
+                            sb_touch.table("handoffs").update({
                                 "updated_at": datetime.now(timezone.utc).isoformat(),
                                 "message_count": (active_handoff.get("message_count") or 0) + 1,
                             }).eq("id", active_handoff["id"]).execute()

@@ -41,7 +41,7 @@ async def list_handoffs(ctx: TenantContext = Depends(get_tenant_context)):
     """List active handoffs for the tenant."""
     sb = get_supabase_client()
     result = (
-        sb.table("active_handoffs")
+        sb.table("handoffs")
         .select("*")
         .eq("tenant_id", ctx.tenant_id)
         .eq("status", "active")
@@ -56,7 +56,7 @@ async def list_handoff_history(ctx: TenantContext = Depends(get_tenant_context))
     """List closed/expired handoffs with resolution data."""
     sb = get_supabase_client()
     result = (
-        sb.table("active_handoffs")
+        sb.table("handoffs")
         .select("*")
         .eq("tenant_id", ctx.tenant_id)
         .in_("status", ["closed", "expired"])
@@ -72,7 +72,7 @@ async def handoff_stats(ctx: TenantContext = Depends(get_tenant_context)):
     """Summary stats for analytics."""
     sb = get_supabase_client()
     all_rows = (
-        sb.table("active_handoffs")
+        sb.table("handoffs")
         .select("status, created_at, closed_at, first_response_at, closed_by, message_count")
         .eq("tenant_id", ctx.tenant_id)
         .execute()
@@ -121,7 +121,7 @@ async def reply_to_handoff(
     """Send a reply from the human agent to the WhatsApp user."""
     sb = get_supabase_client()
     result = (
-        sb.table("active_handoffs")
+        sb.table("handoffs")
         .select("*")
         .eq("id", handoff_id)
         .eq("tenant_id", ctx.tenant_id)
@@ -144,7 +144,8 @@ async def reply_to_handoff(
 
     sb.table("conversations").insert({
         "tenant_id": ctx.tenant_id,
-        "user_number": handoff["whatsapp_number"],
+        "channel": "whatsapp",
+        "channel_user_id": handoff["whatsapp_number"],
         "role": "assistant",
         "message": body.message,
         "metadata": {"source": "human_agent"},
@@ -158,7 +159,7 @@ async def reply_to_handoff(
     if not handoff.get("first_response_at"):
         update["first_response_at"] = now
 
-    sb.table("active_handoffs").update(update).eq("id", handoff_id).execute()
+    sb.table("handoffs").update(update).eq("id", handoff_id).execute()
 
     logger.info("handoff_replied_via_ui", extra={"handoff_id": handoff_id, "to": handoff["whatsapp_number"]})
     return {"status": "sent"}
@@ -172,7 +173,7 @@ async def close_handoff(
     """Close an active handoff, returning control to the bot."""
     sb = get_supabase_client()
     result = (
-        sb.table("active_handoffs")
+        sb.table("handoffs")
         .select("id, whatsapp_number, message_count")
         .eq("id", handoff_id)
         .eq("tenant_id", ctx.tenant_id)
@@ -183,7 +184,7 @@ async def close_handoff(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Handoff not found")
 
     now = _now()
-    sb.table("active_handoffs").update({
+    sb.table("handoffs").update({
         "status": "closed",
         "closed_at": now,
         "closed_by": "agent_ui",
