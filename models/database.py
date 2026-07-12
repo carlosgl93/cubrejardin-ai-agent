@@ -25,7 +25,7 @@ class BaseModel:
 
 @dataclass
 class Conversation(BaseModel):
-    user_number: str = ""
+    channel_user_id: str = ""
     role: str = ""
     message: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)

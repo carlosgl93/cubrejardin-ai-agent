@@ -285,7 +285,7 @@ class WhatsAppService:
             conversations = session.query(Conversation)
             latest: Optional[datetime] = None
             for entry in conversations:
-                if entry.user_number == user_id and entry.role == "user":
+                if entry.channel_user_id == user_id and entry.role == "user":
                     candidate = entry.last_interaction_at or entry.created_at
                     if latest is None or candidate > latest:
                         latest = candidate

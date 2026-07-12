@@ -55,7 +55,7 @@ class HandoffAgent:
         escalation = await asyncio.to_thread(_persist)
         try:
             await self.whatsapp_service.pass_thread_control(
-                recipient_id=conversation.user_number,
+                recipient_id=conversation.channel_user_id,
                 metadata=metadata or {},
             )
         except Exception as exc:
@@ -79,7 +79,7 @@ class HandoffAgent:
 
         try:
             await self.whatsapp_service.take_thread_control(
-                recipient_id=conversation.user_number,
+                recipient_id=conversation.channel_user_id,
                 metadata=metadata or {},
             )
         except Exception as exc:
