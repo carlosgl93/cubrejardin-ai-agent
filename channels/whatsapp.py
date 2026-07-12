@@ -127,19 +127,43 @@ class WhatsAppAdapter(ChannelAdapter):
             "token_expires_at": token_expires_at,
         }
 
-    async def refresh_token(self, credentials: dict, **context: Any) -> dict:
-        """Refresh a WhatsApp access token.
+    def refresh_token(self, credentials: dict, **context: Any) -> dict:
+        """Refresh a long-lived WhatsApp access token.
 
-        Meta's Embedded Signup flow refreshes the stored token when the tenant
-        re-runs it. The caller passes the new ``auth_code`` via
-        ``context["auth_code"]`` plus ``tenant_id``.
+        Uses Meta's ``fb_exchange_token`` grant to extend the existing
+        long-lived token — no fresh OAuth code required.
+
+        https://developers.facebook.com/docs/facebook-login/access-tokens/refreshing
         """
 
-        if "auth_code" not in context:
-            raise ValueError(
-                "refresh_token requires 'auth_code' in context for WhatsApp"
-            )
-        return await self.exchange_oauth(context["auth_code"], **context)
+        import os
+
+        app_id = os.environ.get("FACEBOOK_APP_ID")
+        app_secret = os.environ.get("FACEBOOK_APP_SECRET")
+        if not app_id or not app_secret:
+            raise RuntimeError("FACEBOOK_APP_ID/SECRET not configured")
+
+        current_token = credentials.get("access_token")
+        if not current_token:
+            raise ValueError("credentials.access_token required")
+
+        resp = httpx.get(
+            "https://graph.facebook.com/v21.0/oauth/access_token",
+            params={
+                "grant_type": "fb_exchange_token",
+                "client_id": app_id,
+                "client_secret": app_secret,
+                "fb_exchange_token": current_token,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        new_creds = dict(credentials)
+        new_creds["access_token"] = data["access_token"]
+        new_creds["expires_in"] = data.get("expires_in", 5184000)
+        return new_creds
 
     async def send_message(
         self,
