@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import os
-import httpx
 
 from channels.base import ChannelAdapter, InboundMessage
 
@@ -11,17 +12,16 @@ GRAPH_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 class InstagramAdapter(ChannelAdapter):
     name = "instagram"
 
-    def exchange_oauth(self, code: str, **context) -> dict:
-        """Exchange Meta OAuth code for IG credentials.
-        Implemented in Task C.1."""
+    async def exchange_oauth(self, code: str, **context) -> dict:
+        """Exchange Meta OAuth code for IG credentials. Implemented in Task C.1."""
         raise NotImplementedError("Implemented in C.1")
 
     def refresh_token(self, credentials: dict, **context) -> dict:
-        """Implemented in Task C.3 — refresh long-lived Page token."""
+        """Refresh long-lived Page token. Implemented in Task C.3."""
         raise NotImplementedError("Implemented in C.3")
 
     async def send_message(self, recipient_id: str, text: str, **context) -> dict:
-        """Implemented in Task F.1 — POST to /me/messages."""
+        """POST to /me/messages. Implemented in Task F.1."""
         raise NotImplementedError("Implemented in F.1")
 
     def parse_webhook(self, payload: dict) -> list[InboundMessage]:
