@@ -106,7 +106,7 @@ async def test_is_within_window_loads_from_persistence(monkeypatch) -> None:
     session = SessionLocal()
     recent_ts = utc_now()
     conversation = Conversation(
-        user_number="521999888777",
+        channel_user_id="521999888777",
         role="user",
         message="Hola",
         last_interaction_at=recent_ts,

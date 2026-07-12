@@ -80,7 +80,7 @@ class AgentOrchestrator:
         timestamp = utc_now()
         entry = Conversation(
             tenant_id=self.tenant_id,
-            user_number=user_number,
+            channel_user_id=user_number,
             role=role,
             message=message,
             message_id=message_id,

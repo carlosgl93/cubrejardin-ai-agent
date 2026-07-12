@@ -101,6 +101,7 @@ def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
         .select("*")
         .eq("whatsapp_number", whatsapp_number)
         .eq("tenant_id", tenant_id)
+        .eq("channel", "whatsapp")
         .eq("status", "active")
         .order("created_at", desc=True)
         .limit(1)
