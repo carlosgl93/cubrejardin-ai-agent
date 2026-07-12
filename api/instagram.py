@@ -37,6 +37,14 @@ class ExchangeInstagramCodeResponse(BaseModel):
     token_expires_at: str
 
 
+class InstagramStatusResponse(BaseModel):
+    instagram_connected: bool
+    status: str
+    ig_user_id: str | None = None
+    page_id: str | None = None
+    token_expires_at: str | None = None
+
+
 async def _graph_get(path: str, params: dict) -> dict[str, Any]:
     """Async GET helper against Graph API. Wrapped for tests.
 
@@ -211,7 +219,7 @@ async def exchange(
     )
 
 
-@router.get("/status")
+@router.get("/status", response_model=InstagramStatusResponse)
 async def status(ctx: TenantContext = Depends(get_tenant_context)):
     row = _supabase_fetch_ig_creds(ctx.tenant_id)
     if not row:
