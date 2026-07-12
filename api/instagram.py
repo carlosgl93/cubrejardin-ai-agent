@@ -209,3 +209,20 @@ async def exchange(
         status="active",
         token_expires_at=expires_at.isoformat(),
     )
+
+
+@router.get("/status")
+async def status(ctx: TenantContext = Depends(get_tenant_context)):
+    row = _supabase_fetch_ig_creds(ctx.tenant_id)
+    if not row:
+        return {
+            "instagram_connected": False,
+            "status": "absent",
+        }
+    return {
+        "instagram_connected": row.get("status") == "active",
+        "status": row.get("status"),
+        "ig_user_id": row.get("ig_user_id"),
+        "page_id": row.get("page_id"),
+        "token_expires_at": row.get("token_expires_at"),
+    }

@@ -55,3 +55,33 @@ def test_exchange_endpoint_persists_credentials():
     assert body["status"] == "active"
     assert body["token_expires_at"]
     upsert.assert_called_once()
+
+
+def test_status_endpoint_returns_state():
+    fake_ctx = TenantContext(
+        tenant_id="TENANT_UUID",
+        user_id="USER_UUID",
+        role="owner",
+        tenant_name="Test Tenant",
+    )
+
+    def override_get_tenant_context():
+        return fake_ctx
+
+    app.dependency_overrides[get_tenant_context] = override_get_tenant_context
+    try:
+        with patch("api.instagram._supabase_fetch_ig_creds", return_value={
+            "status": "active",
+            "ig_user_id": "17841401234567890",
+            "page_id": "1234567890",
+            "token_expires_at": "2026-09-10T00:00:00+00:00",
+        }):
+            resp = client.get("/api/instagram/status",
+                              headers={"Authorization": "Bearer FAKE_JWT"})
+    finally:
+        app.dependency_overrides.pop(get_tenant_context, None)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["instagram_connected"] is True
+    assert body["status"] == "active"
