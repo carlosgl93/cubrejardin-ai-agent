@@ -20,6 +20,36 @@ class TenantResponse(BaseModel):
     name: str
     slug: str
     plan: str
+    whatsapp_connected: bool = False
+    instagram_connected: bool = False
+
+
+def _fetch_whatsapp_state(tenant_id: str) -> dict:
+    """Return whether the tenant has an active WhatsApp credential row."""
+    supabase = get_supabase_client()
+    res = (
+        supabase.table("tenant_whatsapp_credentials")
+        .select("status")
+        .eq("tenant_id", tenant_id)
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    return {"whatsapp_connected": bool(res.data and res.data.get("status") == "active")}
+
+
+def _fetch_instagram_state(tenant_id: str) -> dict:
+    """Return whether the tenant has an active Instagram credential row."""
+    supabase = get_supabase_client()
+    res = (
+        supabase.table("tenant_instagram_credentials")
+        .select("status")
+        .eq("tenant_id", tenant_id)
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    return {"instagram_connected": bool(res.data and res.data.get("status") == "active")}
 
 
 @router.post("/", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
@@ -91,7 +121,16 @@ async def get_my_tenant(
         )
 
     t = result.data
-    return TenantResponse(id=t["id"], name=t["name"], slug=t["slug"], plan=t.get("plan", "free"))
+    wa_state = _fetch_whatsapp_state(ctx.tenant_id)
+    ig_state = _fetch_instagram_state(ctx.tenant_id)
+    return TenantResponse(
+        id=t["id"],
+        name=t["name"],
+        slug=t["slug"],
+        plan=t.get("plan", "free"),
+        whatsapp_connected=wa_state["whatsapp_connected"],
+        instagram_connected=ig_state["instagram_connected"],
+    )
 
 
 class BotConfigRequest(BaseModel):
