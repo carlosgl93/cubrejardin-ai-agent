@@ -58,7 +58,13 @@ def run_migration(request: Request) -> dict:
     sql_path = pathlib.Path(__file__).parent / "sql" / "migrations" / "006_instagram_channel.sql"
     sql_text = sql_path.read_text()
 
-    db_url = os.environ.get("DATABASE_URL") or settings.database_url
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        # Derive direct DB URL from the Supabase project URL. The repo's
+        # .env file (db.db.<ref>.supabase.co) is malformed; the correct
+        # hostname is db.<ref>.supabase.co on port 5432.
+        project_ref = settings.supabase_url.split("//", 1)[-1].split(".", 1)[0]
+        db_url = f"postgresql://postgres:{settings.supabase_db_password}@db.{project_ref}.supabase.co:5432/postgres"
     if db_url.startswith("postgresql+psycopg://"):
         db_url = db_url.replace("postgresql+psycopg://", "postgresql://", 1)
 
