@@ -86,7 +86,6 @@ class Settings(BaseSettings):
     supabase_url: str = Field("", validation_alias="SUPABASE_URL")
     supabase_service_role_key: str = Field("", validation_alias="SUPABASE_SERVICE_ROLE_KEY")
     supabase_jwt_secret: str = Field("", validation_alias="SUPABASE_JWT_SECRET")
-    supabase_db_password: str = Field("", validation_alias="SUPABASE_DB_PASSWORD")
 
     # 🌍 Site
     site_url: str = Field("https://sgcloud.cl", validation_alias="SITE_URL")
