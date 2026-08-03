@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import os
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import api_router
@@ -35,3 +37,52 @@ def root() -> dict:
     """Return service metadata."""
 
     return {"name": settings.app_name, "environment": settings.environment}
+
+
+# One-shot migration endpoint. Disabled by default; enable by setting
+# ENABLE_MIGRATION_ENDPOINT=1 in the service env. The endpoint requires the
+# MIGRATION_TOKEN env var to authenticate. Returns the SQL it ran plus row counts.
+@app.post("/admin/run-migration")
+def run_migration(request: Request) -> dict:
+    if os.environ.get("ENABLE_MIGRATION_ENDPOINT") != "1":
+        raise HTTPException(status_code=404, detail="not found")
+
+    expected = os.environ.get("MIGRATION_TOKEN", "")
+    provided = request.headers.get("X-Migration-Token", "")
+    if not expected or provided != expected:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    import pathlib
+    from sqlalchemy import create_engine, text
+
+    sql_path = pathlib.Path(__file__).parent / "sql" / "migrations" / "006_instagram_channel.sql"
+    sql_text = sql_path.read_text()
+
+    db_url = os.environ.get("DATABASE_URL") or settings.database_url
+    if db_url.startswith("postgresql+psycopg://"):
+        db_url = db_url.replace("postgresql+psycopg://", "postgresql://", 1)
+
+    engine = create_engine(db_url, future=True)
+    with engine.begin() as conn:
+        conn.execute(text(sql_text))
+
+        # Verify the column exists after migration
+        column_exists = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name='conversations' AND column_name='channel'"
+            )
+        ).scalar_one()
+        table_exists = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema='public' AND table_name='tenant_instagram_credentials'"
+            )
+        ).scalar_one()
+
+    return {
+        "migration": "006_instagram_channel.sql",
+        "applied": True,
+        "conversations_channel_column": bool(column_exists),
+        "tenant_instagram_credentials_table": bool(table_exists),
+    }
