@@ -53,7 +53,7 @@ def run_migration(request: Request) -> dict:
         raise HTTPException(status_code=403, detail="forbidden")
 
     import pathlib
-    from sqlalchemy import create_engine, text
+    import psycopg
 
     sql_path = pathlib.Path(__file__).parent / "sql" / "migrations" / "006_instagram_channel.sql"
     sql_text = sql_path.read_text()
@@ -62,27 +62,25 @@ def run_migration(request: Request) -> dict:
     if db_url.startswith("postgresql+psycopg://"):
         db_url = db_url.replace("postgresql+psycopg://", "postgresql://", 1)
 
-    engine = create_engine(db_url, future=True)
-    with engine.begin() as conn:
-        conn.execute(text(sql_text))
+    with psycopg.connect(db_url, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql_text)
 
-        # Verify the column exists after migration
-        column_exists = conn.execute(
-            text(
+            cur.execute(
                 "SELECT COUNT(*) FROM information_schema.columns "
                 "WHERE table_schema='public' AND table_name='conversations' AND column_name='channel'"
             )
-        ).scalar_one()
-        table_exists = conn.execute(
-            text(
+            column_exists = cur.fetchone()[0] > 0
+
+            cur.execute(
                 "SELECT COUNT(*) FROM information_schema.tables "
                 "WHERE table_schema='public' AND table_name='tenant_instagram_credentials'"
             )
-        ).scalar_one()
+            table_exists = cur.fetchone()[0] > 0
 
     return {
         "migration": "006_instagram_channel.sql",
         "applied": True,
-        "conversations_channel_column": bool(column_exists),
-        "tenant_instagram_credentials_table": bool(table_exists),
+        "conversations_channel_column": column_exists,
+        "tenant_instagram_credentials_table": table_exists,
     }
