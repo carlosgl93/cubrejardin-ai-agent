@@ -27,29 +27,39 @@ class TenantResponse(BaseModel):
 def _fetch_whatsapp_state(tenant_id: str) -> dict:
     """Return whether the tenant has an active WhatsApp credential row."""
     supabase = get_supabase_client()
-    res = (
-        supabase.table("tenant_whatsapp_credentials")
-        .select("status")
-        .eq("tenant_id", tenant_id)
-        .limit(1)
-        .maybe_single()
-        .execute()
-    )
-    return {"whatsapp_connected": bool(res.data and res.data.get("status") == "active")}
+    try:
+        res = (
+            supabase.table("tenant_whatsapp_credentials")
+            .select("status")
+            .eq("tenant_id", tenant_id)
+            .limit(1)
+            .maybe_single()
+            .execute()
+        )
+        if not res or not getattr(res, "data", None):
+            return {"whatsapp_connected": False}
+        return {"whatsapp_connected": res.data.get("status") == "active"}
+    except Exception:
+        return {"whatsapp_connected": False}
 
 
 def _fetch_instagram_state(tenant_id: str) -> dict:
     """Return whether the tenant has an active Instagram credential row."""
     supabase = get_supabase_client()
-    res = (
-        supabase.table("tenant_instagram_credentials")
-        .select("status")
-        .eq("tenant_id", tenant_id)
-        .limit(1)
-        .maybe_single()
-        .execute()
-    )
-    return {"instagram_connected": bool(res.data and res.data.get("status") == "active")}
+    try:
+        res = (
+            supabase.table("tenant_instagram_credentials")
+            .select("status")
+            .eq("tenant_id", tenant_id)
+            .limit(1)
+            .maybe_single()
+            .execute()
+        )
+        if not res or not getattr(res, "data", None):
+            return {"instagram_connected": False}
+        return {"instagram_connected": res.data.get("status") == "active"}
+    except Exception:
+        return {"instagram_connected": False}
 
 
 @router.post("/", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)

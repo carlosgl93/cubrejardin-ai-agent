@@ -25,7 +25,8 @@ jobs:
         run: |
           gcloud builds submit \
             --config cloudbuild.yaml \
-            --project sg-cloud-cefee
+            --project sg-cloud-cefee \
+            --no-stream
 
       - name: Apply environment variables
         run: |
