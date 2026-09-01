@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
-
 from models.database import DatabaseSession, LearningQueueEntry
 from services.audit_service import record_audit_event
 from services.openai_service import OpenAIService
@@ -94,10 +92,15 @@ class LearningService:
     ) -> int:
         """Embed validated queue entries and push them into the vector store."""
 
-        statement = select(LearningQueueEntry).where(LearningQueueEntry.validated.is_(True))
-        if entry_ids is not None:
-            statement = statement.where(LearningQueueEntry.id.in_(entry_ids))
-        entries = self.session.scalars(statement)
+        # Get all validated entries
+        all_entries = self.session.query(LearningQueueEntry)
+
+        # Filter by validated status and optionally by IDs
+        entries = [
+            e for e in all_entries
+            if e.validated and (entry_ids is None or e.id in entry_ids)
+        ]
+
         if not entries:
             logger.info("learning_no_validated_entries", extra={"entry_ids": entry_ids or []})
             return 0

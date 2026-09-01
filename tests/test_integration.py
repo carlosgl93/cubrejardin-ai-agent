@@ -49,6 +49,7 @@ class DummyWhatsAppService:
     """Avoid real network calls for WhatsApp interactions."""
 
     def __init__(self) -> None:
+        self.phone_id: str = "1234567890"
         self.sent_messages: List[str] = []
         self.pass_calls: List[Tuple[str, Dict[str, Any]]] = []
         self.take_calls: List[Tuple[str, Dict[str, Any]]] = []

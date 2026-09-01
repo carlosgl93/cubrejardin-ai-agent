@@ -113,6 +113,7 @@ class HandoffAgent:
 
         def _queue() -> Any:
             return self.learning_service.queue_human_response(
+                tenant_id=conversation.tenant_id,
                 conversation_id=conversation.id,
                 user_message=user_message,
                 human_answer=human_answer,

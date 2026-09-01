@@ -186,3 +186,152 @@ This demonstrates the complete flow of the whatsapp_business_management permissi
 - WhatsApp Cloud API Docs: https://developers.facebook.com/docs/whatsapp/cloud-api
 - App Review Guide: https://developers.facebook.com/docs/app-review
 
+---
+
+# Instagram App Review Addendum
+
+For `instagram_business_basic`, `instagram_business_manage_messages`, `instagram_business_manage_comments` permissions on the same `Agents-Whtsapp` app (or a new combined app — see ROADMAP.md).
+
+## Key Differences vs WhatsApp Submission
+
+| Aspect | WhatsApp | Instagram |
+|---|---|---|
+| Auth model | Server-to-server (permanent token) | **OAuth via Instagram Login** (user-facing flow) |
+| Test account | WA Business number | IG **Professional** account (Business or Creator) |
+| Permission names | `whatsapp_business_management` | `instagram_business_basic`, `instagram_business_manage_messages`, `instagram_business_manage_comments` |
+| Webhook | Single webhook per WABA | Webhooks per IG account subscribed to app |
+| Business verification | Pre-verified for SG CLOUD SpA | Pre-verified for SG CLOUD SpA (reuses same Business Manager) |
+
+**Critical:** IG uses **Instagram Login** (OAuth), not server-to-server tokens. The screencast **must** show the user-facing OAuth flow.
+
+## Submission Notes Template
+
+```
+This is a multi-tenant chatbot platform that connects to Instagram Professional
+accounts via Instagram Login (OAuth 2.0) to automate customer service DMs.
+
+AUTHENTICATION METHOD:
+- Instagram Login (OAuth 2.0) flow — end user authorizes the app
+- Each tenant (e.g. CubreJardin) connects their IG Professional account via OAuth
+- App exchanges short-lived code for long-lived user access token
+- Token refresh handled server-side via jobs/refresh_instagram_tokens.py cron
+
+USE CASE:
+CubreJardin (and future tenants) uses this platform to automate responses to
+customer DMs on Instagram. The bot:
+- Receives incoming IG DMs via webhook subscription
+- Processes FAQs using RAG (Retrieval Augmented Generation)
+- Sends automated responses back through the Instagram Messaging API
+- Escalates complex queries to human agents
+
+PERMISSIONS REQUESTED:
+1. instagram_business_basic — read basic IG account profile info
+2. instagram_business_manage_messages — receive/send DMs on behalf of the account
+3. instagram_business_manage_comments — read/reply to comments (optional for v1)
+
+PERMISSION USAGE:
+1. Receive incoming DMs from customers (webhook subscription on messages event)
+2. Send text responses to customer inquiries via POST /{ig-user-id}/messages
+3. Mark conversations as seen
+4. Token refresh on long-lived tokens (60-day expiry)
+
+OAUTH FLOW (shown in screencast):
+1. Tenant clicks "Connect Instagram" in our backoffice
+2. Redirected to Instagram Login OAuth dialog
+3. Tenant grants requested permissions
+4. IG redirects back to our callback URL with auth code
+5. Server exchanges code for short-lived user token
+6. Server exchanges short-lived for long-lived token (60 days)
+7. Long-lived token stored per tenant in database
+8. Cron job refreshes token before expiry
+```
+
+## What to Show in Screencast
+
+1. **App Configuration** (2 min)
+   - developers.facebook.com → My Apps → `Agents-Whtsapp`
+   - Show Instagram product is added
+   - Show "Instagram API with Instagram Login" is configured
+   - Show valid OAuth redirect URIs listed
+
+2. **Business Manager Verification** (1 min)
+   - business.facebook.com/settings
+   - Show SG CLOUD SpA is verified
+   - Show the app is owned by this Business Manager
+
+3. **OAuth Flow** (3-4 min)
+   - Open the backoffice "Connect Instagram" button
+   - Redirect to Instagram Login screen
+   - Show the permission scopes requested (`instagram_business_basic`, `instagram_business_manage_messages`)
+   - Click "Authorize"
+   - Show redirect to callback with auth code
+   - Show server log: code exchanged for token, token stored
+
+4. **End-to-End Use Case** (3-4 min)
+   - From a separate phone/account, send a DM to CubreJardin's IG Professional account
+   - Show webhook logs receiving the message event
+   - Show bot processing and responding
+   - Show the response appearing in the customer's DM
+   - Optional: show escalation flow
+
+5. **Token Refresh** (1 min)
+   - Show jobs/refresh_instagram_tokens.py running
+   - Show log output confirming token refresh succeeded
+
+## Test Account Requirements
+
+When submitting, you must provide:
+- **IG Professional account username** that Meta's reviewers can use as test recipient
+- **Test instructions** with: exact message to send, expected bot reply
+- **Screencast URL** (hosted on YouTube/Drive/Loom with public access)
+
+## Common Rejection Reasons (IG-specific)
+
+| Rejection Reason | Solution |
+|---|---|
+| "No OAuth flow shown" | Screencast must include the user clicking "Authorize" on Instagram Login |
+| "Test account not provided" | Include the IG username in submission form |
+| "Permission usage unclear" | Explicitly map each scope to a server endpoint that calls it |
+| "Token refresh not shown" | Demonstrate the cron job refreshing tokens |
+| "Webhooks not verified" | Show webhook subscription in App Dashboard + live event delivery |
+
+## Checklist Before Submission
+
+- [ ] All 3 IG permissions requested in single submission
+- [ ] Submission notes mention "Instagram Login" / "OAuth" explicitly
+- [ ] Screencast shows full OAuth flow (login → authorize → callback)
+- [ ] Screencast shows Business Manager is SG CLOUD SpA (verified)
+- [ ] Screencast shows end-to-end DM flow
+- [ ] Screencast shows token refresh mechanism
+- [ ] Test IG Professional account username provided in submission form
+- [ ] Step-by-step test instructions provided
+- [ ] All sensitive tokens/user IDs blurred
+- [ ] Duration 5-15 minutes, English captions or narration
+
+## Messenger App Review Addendum (if submitting in same review cycle)
+
+For `pages_messaging` and `pages_manage_metadata` permissions.
+
+Differences vs IG:
+- Auth model: **Facebook Login** (not Instagram Login), but similar OAuth flow
+- Test account: **FB Page** that the test user can message
+- Token model: Page access token (long-lived, 60 days)
+
+**Recommendation:** submit IG + Messenger in the same App Review submission — Meta allows multiple permission requests per submission. Saves a full review cycle.
+
+Submission notes template is identical to IG section above, with these substitutions:
+- Replace "Instagram Login" → "Facebook Login for Business"
+- Replace `instagram_*` permissions → `pages_messaging`, `pages_manage_metadata`
+- Replace IG Professional account → FB Page
+- Replace `/{ig-user-id}/messages` → `/{page-id}/messages` via Send API
+
+## Reference Links
+
+- Instagram Messaging API: https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/messaging-api
+- Instagram API (Get Started): https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login
+- Messenger Platform Overview: https://developers.facebook.com/documentation/business-messaging/messenger-platform/overview
+- Messenger Platform Get Started: https://developers.facebook.com/documentation/business-messaging/messenger-platform/get-started
+- Messenger Conversations API: https://developers.facebook.com/documentation/business-messaging/messenger-platform/conversations
+- Permissions Reference: https://developers.facebook.com/docs/permissions/
+- App Review: https://developers.facebook.com/docs/app-review
+

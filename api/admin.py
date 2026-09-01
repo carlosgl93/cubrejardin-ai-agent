@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from agents.handoff_agent import HandoffAgent
 from api.dependencies import (
@@ -14,6 +15,7 @@ from api.dependencies import (
 )
 from models.database import Conversation, DatabaseSession
 from services.audit_service import record_audit_event
+from utils import logger
 from services.document_ingestion import ingest_document
 from services.learning_service import LearningService
 from services.openai_service import OpenAIService
@@ -139,3 +141,53 @@ def validate_learning_entry(
         entry_ids=[entry_id],
     )
     return {"ingested": ingested}
+
+
+# ─── Queue Metrics ────────────────────────────────────────────────────────────────
+
+@router.get("/queue/metrics")
+async def get_queue_metrics() -> dict:
+    """Get message queue metrics.
+
+    Returns metrics from Redis including:
+    - Total messages sent
+    - Failed messages
+    - Queue lengths by priority
+    - Dead letter count
+    """
+    try:
+        from services.message_queue import MessageQueueService
+
+        queue = MessageQueueService()
+        metrics = await queue.get_metrics()
+        await queue.close()
+
+        return {
+            "messages_sent": int(metrics.get("messages_sent", 0)),
+            "messages_failed": int(metrics.get("messages_failed", 0)),
+            "queue_high": int(metrics.get("queue_high", 0)),
+            "queue_normal": int(metrics.get("queue_normal", 0)),
+            "queue_low": int(metrics.get("queue_low", 0)),
+            "dead_letter_count": int(metrics.get("dead_letter_count", 0)),
+        }
+    except ImportError:
+        return {
+            "error": "Message queue not configured",
+            "messages_sent": 0,
+            "messages_failed": 0,
+            "queue_high": 0,
+            "queue_normal": 0,
+            "queue_low": 0,
+            "dead_letter_count": 0,
+        }
+    except Exception as exc:
+        logger.error("queue_metrics_failed", extra={"error": str(exc)})
+        return {
+            "error": str(exc),
+            "messages_sent": 0,
+            "messages_failed": 0,
+            "queue_high": 0,
+            "queue_normal": 0,
+            "queue_low": 0,
+            "dead_letter_count": 0,
+        }
