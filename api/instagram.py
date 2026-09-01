@@ -76,15 +76,20 @@ def _supabase_client():
 
 def _supabase_fetch_ig_creds(tenant_id: str) -> Optional[dict]:
     supabase = _supabase_client()
-    res = (
-        supabase.table("tenant_instagram_credentials")
-        .select("*")
-        .eq("tenant_id", tenant_id)
-        .limit(1)
-        .maybe_single()
-        .execute()
-    )
-    return res.data
+    try:
+        res = (
+            supabase.table("tenant_instagram_credentials")
+            .select("*")
+            .eq("tenant_id", tenant_id)
+            .limit(1)
+            .maybe_single()
+            .execute()
+        )
+        if not res or not getattr(res, "data", None):
+            return None
+        return res.data
+    except Exception:
+        return None
 
 
 def _supabase_update_ig_creds(tenant_id: str, updates: dict) -> None:
