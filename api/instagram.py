@@ -30,6 +30,11 @@ class ExchangeInstagramCodeRequest(BaseModel):
     auth_code: str
     redirect_uri: str = ""
     config_id: str = ""
+    # Captured from sessionInfoListener on the FBL popup. When present, the
+    # backend skips page/IG discovery (which fails for system-user tokens
+    # issued by FBL) and writes the connection directly.
+    page_id: str = ""
+    ig_user_id: str = ""
 
 
 class ExchangeInstagramCodeResponse(BaseModel):
@@ -141,6 +146,7 @@ async def exchange(
     print(
         f"[ig.exchange] start tenant={ctx.tenant_id} has_code={bool(code)} "
         f"config_id={config_id!r} redirect_uri={redirect_uri!r} "
+        f"page_id={payload.page_id!r} ig_user_id={payload.ig_user_id!r} "
         f"INSTAGRAM_PAGE_ID={os.getenv('INSTAGRAM_PAGE_ID', '<unset>')!r}",
         flush=True,
     )
@@ -192,7 +198,55 @@ async def exchange(
     long_token = long_resp["access_token"]
     expires_in = long_resp.get("expires_in", 5184000)
 
-    # 3. Resolve the IG-linked Page.
+    # 3a. Fast-path: FBL popup captured page_id + ig_user_id via
+    # sessionInfoListener. Write directly. Bypasses the token-based discovery
+    # (which fails because FBL binds the code to the app's auto-created
+    # system user, which has no Page/IG assignments even after we assign
+    # assets to other system users via Business Manager).
+    if payload.page_id and payload.ig_user_id:
+        settings = get_settings()
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        # Use FACEBOOK_PAGE_ACCESS_TOKEN (sgcloudadmin system user) — that
+        # user already owns the Page 1028203907040559. The FBL long_token
+        # belongs to "Agents-Whtsapp System User" which has empty /me/accounts.
+        page_access_token = settings.facebook_page_access_token
+        row = {
+            "ig_user_id": payload.ig_user_id,
+            "page_id": payload.page_id,
+            "page_access_token": page_access_token,
+            "status": "active",
+            "token_expires_at": expires_at.isoformat(),
+            "raw_oauth_response": {
+                "short_token_resp": _scrub_tokens(token_resp),
+                "long_token_resp": _scrub_tokens(long_resp),
+                "fbl_popup": True,
+                "page_id": payload.page_id,
+                "ig_user_id": payload.ig_user_id,
+            },
+        }
+        existing = _supabase_fetch_ig_creds(ctx.tenant_id)
+        if existing and existing.get("status") == "active":
+            _supabase_update_ig_creds(ctx.tenant_id, {
+                "page_access_token": page_access_token,
+                "token_expires_at": expires_at.isoformat(),
+                "page_id": payload.page_id,
+                "ig_user_id": payload.ig_user_id,
+            })
+        else:
+            _supabase_upsert_ig_creds(ctx.tenant_id, row)
+        print(
+            f"[ig.exchange] fbl_fast_path tenant={ctx.tenant_id} "
+            f"page_id={payload.page_id} ig_user_id={payload.ig_user_id}",
+            flush=True,
+        )
+        return ExchangeInstagramCodeResponse(
+            ig_user_id=payload.ig_user_id,
+            page_id=payload.page_id,
+            status="active",
+            token_expires_at=expires_at.isoformat(),
+        )
+
+    # 3b. Resolve the IG-linked Page.
     # /me/accounts requires pages_show_list which isn't granted by IG signup
     # scopes. Strategy: use the user's IG-scoped token to find the IG business
     # account, then read its linked page.
