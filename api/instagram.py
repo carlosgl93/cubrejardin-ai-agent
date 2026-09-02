@@ -183,18 +183,41 @@ async def exchange(
     expires_in = long_resp.get("expires_in", 5184000)
 
     # 3. Resolve the IG-linked Page.
-    # /me/accounts with the user token requires pages_show_list (or legacy
-    # manage_pages) which isn't granted by the Embedded Signup scopes we
-    # request. And FACEBOOK_PAGE_ACCESS_TOKEN is a *page* access token, not a
-    # system user token, so /me/accounts returns [] there too. For single-
-    # tenant onboarding we look up the page directly by id; multi-tenant
-    # requires storing per-tenant page_id (TODO: tenant.facebook_page_id).
-    page_id_env = os.getenv("INSTAGRAM_PAGE_ID", "")
-    if page_id_env:
-        pages = [{"id": page_id_env}]
-        print(f"[ig.exchange] using INSTAGRAM_PAGE_ID={page_id_env}", flush=True)
+    # /me/accounts requires pages_show_list which isn't granted by IG signup
+    # scopes. Strategy: use the user's IG-scoped token to find the IG business
+    # account, then read its linked page.
+    ig_user_id_env = os.getenv("INSTAGRAM_IG_USER_ID", "")
+    if ig_user_id_env:
+        # Single-tenant: query the IG user directly with the user's long_token.
+        # The IG user object exposes `page` (the linked FB Page) in newer Graph
+        # API versions, or we can read the user's IG identity via /{ig_user_id}.
+        try:
+            ig_resp = await _graph_get(f"/{ig_user_id_env}", {
+                "fields": "id,username,name,page{id,name}",
+                "access_token": long_token,
+            })
+            print(
+                f"[ig.exchange] /{ig_user_id_env} resolved={ig_resp}",
+                flush=True,
+            )
+            page_obj = ig_resp.get("page")
+            if page_obj:
+                page_id = page_obj["id"]
+                pages = [{"id": page_id, "access_token": long_token}]
+                print(
+                    f"[ig.exchange] IG user {ig_user_id_env} linked to page {page_id}",
+                    flush=True,
+                )
+            else:
+                pages = []
+        except httpx.HTTPError as e:
+            print(f"[ig.exchange] ig_user_query_failed: {e}", flush=True)
+            pages = []
     else:
-        # Last resort: try user token's /me/accounts anyway.
+        pages = []
+
+    if not pages:
+        # Fallback: try /me/accounts with the user token.
         me_resp = await _graph_get("/me/accounts", {"access_token": long_token})
         pages = me_resp.get("data") or []
         print(
@@ -205,8 +228,8 @@ async def exchange(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "No Facebook Pages found for this account. Set "
-                    "INSTAGRAM_PAGE_ID env var to bypass /me/accounts."
+                    "No IG-linked Page found. Set INSTAGRAM_IG_USER_ID env "
+                    "var with the IG business account id to bypass."
                 ),
             )
 
