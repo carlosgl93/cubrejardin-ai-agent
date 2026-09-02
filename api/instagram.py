@@ -53,6 +53,19 @@ async def _graph_get(path: str, params: dict) -> dict[str, Any]:
     """
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(f"{GRAPH_BASE}{path}", params=params)
+    if resp.status_code >= 400:
+        # raise_for_status would discard Meta's actual error body; log it first
+        # so we see WHY Meta rejected the request (redirect_uri mismatch,
+        # invalid code, missing config_id, etc.).
+        import logging
+
+        logging.getLogger(__name__).error(
+            "Meta %s %s -> %s body=%s",
+            "GET",
+            path,
+            resp.status_code,
+            resp.text[:1000],
+        )
     resp.raise_for_status()
     return resp.json()
 
