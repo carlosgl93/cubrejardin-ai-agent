@@ -140,7 +140,8 @@ async def exchange(
     config_id = payload.config_id
     print(
         f"[ig.exchange] start tenant={ctx.tenant_id} has_code={bool(code)} "
-        f"config_id={config_id!r} redirect_uri={redirect_uri!r}",
+        f"config_id={config_id!r} redirect_uri={redirect_uri!r} "
+        f"INSTAGRAM_PAGE_ID={os.getenv('INSTAGRAM_PAGE_ID', '<unset>')!r}",
         flush=True,
     )
     if not code:
