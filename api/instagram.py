@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/instagram", tags=["instagram"])
 class ExchangeInstagramCodeRequest(BaseModel):
     auth_code: str
     redirect_uri: str = ""
+    config_id: str = ""
 
 
 class ExchangeInstagramCodeResponse(BaseModel):
@@ -118,6 +119,7 @@ async def exchange(
 ):
     code = payload.auth_code
     redirect_uri = payload.redirect_uri
+    config_id = payload.config_id
     if not code:
         raise HTTPException(status_code=400, detail="auth_code required")
 
@@ -125,12 +127,13 @@ async def exchange(
     app_id = settings.facebook_target_app_id
     app_secret = settings.facebook_app_secret
 
-    # 1. Exchange code -> short-lived user token
+    # 1. Exchange code -> short-lived user token (FBL v4 requires config_id)
     token_resp = await _graph_get("/oauth/access_token", {
         "client_id": app_id,
         "client_secret": app_secret,
         "redirect_uri": redirect_uri,
         "code": code,
+        **({"config_id": config_id} if config_id else {}),
     })
     if "access_token" not in token_resp:
         raise HTTPException(
