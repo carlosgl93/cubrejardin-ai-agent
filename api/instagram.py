@@ -178,15 +178,35 @@ async def exchange(
     long_token = long_resp["access_token"]
     expires_in = long_resp.get("expires_in", 5184000)
 
-    # 3. Resolve pages user manages
+    # 3. Resolve pages user manages.
+    # /me/accounts with the user token requires pages_show_list (or legacy
+    # manage_pages) which isn't always granted by the Embedded Signup scopes
+    # we request. Fall back to the system-user page access token so we can
+    # still resolve the IG-linked page without depending on user-level scopes.
     me_resp = await _graph_get("/me/accounts", {"access_token": long_token})
     pages = me_resp.get("data") or []
-    log.info("ig.exchange.pages tenant=%s count=%d", ctx.tenant_id, len(pages))
+    log.info("ig.exchange.pages tenant=%s user_count=%d", ctx.tenant_id, len(pages))
+
     if not pages:
-        raise HTTPException(
-            status_code=400,
-            detail="No Facebook Pages found for this account",
-        )
+        # System-user fallback: use the configured page access token to
+        # discover the IG Professional account via /{page_id}.
+        page_token = settings.facebook_page_access_token
+        # Try /me first (system user "me" returns the business/page it
+        # represents when called with a page access token).
+        try:
+            probe = await _graph_get("/me/accounts", {"access_token": page_token, "limit": 50})
+            pages = probe.get("data") or []
+            log.info(
+                "ig.exchange.pages_sysuser tenant=%s count=%d",
+                ctx.tenant_id, len(pages),
+            )
+        except httpx.HTTPError as e:
+            log.warning("ig.exchange.sysuser_probe_failed: %s", e)
+        if not pages:
+            raise HTTPException(
+                status_code=400,
+                detail="No Facebook Pages found for this account",
+            )
 
     # 4. Find a Page with a linked Instagram Professional account
     ig_user_id: Optional[str] = None
@@ -198,7 +218,7 @@ async def exchange(
                 f"/{p['id']}",
                 {
                     "fields": "instagram_business_account",
-                    "access_token": p.get("access_token", long_token),
+                    "access_token": p.get("access_token") or settings.facebook_page_access_token,
                 },
             )
         except httpx.HTTPError:
@@ -207,7 +227,7 @@ async def exchange(
         if igba:
             ig_user_id = igba["id"]
             page_id = p["id"]
-            page_access_token = p.get("access_token", long_token)
+            page_access_token = p.get("access_token") or settings.facebook_page_access_token
             break
 
     if not ig_user_id:
