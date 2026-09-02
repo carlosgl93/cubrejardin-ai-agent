@@ -132,13 +132,15 @@ async def exchange(
 ):
     import logging
 
+    logging.basicConfig(level=logging.INFO)
     log = logging.getLogger(__name__)
     code = payload.auth_code
     redirect_uri = payload.redirect_uri
     config_id = payload.config_id
-    log.info(
-        "ig.exchange.start tenant=%s has_code=%s config_id=%s redirect_uri=%s",
-        ctx.tenant_id, bool(code), bool(config_id), redirect_uri,
+    print(
+        f"[ig.exchange] start tenant={ctx.tenant_id} has_code={bool(code)} "
+        f"config_id={config_id!r} redirect_uri={redirect_uri!r}",
+        flush=True,
     )
     if not code:
         raise HTTPException(status_code=400, detail="auth_code required")
@@ -185,7 +187,7 @@ async def exchange(
     # still resolve the IG-linked page without depending on user-level scopes.
     me_resp = await _graph_get("/me/accounts", {"access_token": long_token})
     pages = me_resp.get("data") or []
-    log.info("ig.exchange.pages tenant=%s user_count=%d", ctx.tenant_id, len(pages))
+    print(f"[ig.exchange] /me/accounts user_count={len(pages)} tenant={ctx.tenant_id}", flush=True)
 
     if not pages:
         # System-user fallback: use the configured page access token to
@@ -196,12 +198,13 @@ async def exchange(
         try:
             probe = await _graph_get("/me/accounts", {"access_token": page_token, "limit": 50})
             pages = probe.get("data") or []
-            log.info(
-                "ig.exchange.pages_sysuser tenant=%s count=%d",
-                ctx.tenant_id, len(pages),
+            print(
+                f"[ig.exchange] /me/accounts sysuser_count={len(pages)} tenant={ctx.tenant_id} "
+                f"raw={probe}",
+                flush=True,
             )
         except httpx.HTTPError as e:
-            log.warning("ig.exchange.sysuser_probe_failed: %s", e)
+            print(f"[ig.exchange] sysuser_probe_failed: {e}", flush=True)
         if not pages:
             raise HTTPException(
                 status_code=400,
@@ -231,9 +234,9 @@ async def exchange(
             break
 
     if not ig_user_id:
-        log.info(
-            "ig.exchange.no_ig tenant=%s page_ids=%s",
-            ctx.tenant_id, [p.get("id") for p in pages],
+        print(
+            f"[ig.exchange] no_ig tenant={ctx.tenant_id} page_ids={[p.get('id') for p in pages]}",
+            flush=True,
         )
         raise HTTPException(
             status_code=400,
