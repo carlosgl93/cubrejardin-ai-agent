@@ -130,9 +130,16 @@ async def exchange(
     payload: ExchangeInstagramCodeRequest,
     ctx: TenantContext = Depends(get_tenant_context),
 ):
+    import logging
+
+    log = logging.getLogger(__name__)
     code = payload.auth_code
     redirect_uri = payload.redirect_uri
     config_id = payload.config_id
+    log.info(
+        "ig.exchange.start tenant=%s has_code=%s config_id=%s redirect_uri=%s",
+        ctx.tenant_id, bool(code), bool(config_id), redirect_uri,
+    )
     if not code:
         raise HTTPException(status_code=400, detail="auth_code required")
 
@@ -174,6 +181,7 @@ async def exchange(
     # 3. Resolve pages user manages
     me_resp = await _graph_get("/me/accounts", {"access_token": long_token})
     pages = me_resp.get("data") or []
+    log.info("ig.exchange.pages tenant=%s count=%d", ctx.tenant_id, len(pages))
     if not pages:
         raise HTTPException(
             status_code=400,
@@ -203,6 +211,10 @@ async def exchange(
             break
 
     if not ig_user_id:
+        log.info(
+            "ig.exchange.no_ig tenant=%s page_ids=%s",
+            ctx.tenant_id, [p.get("id") for p in pages],
+        )
         raise HTTPException(
             status_code=400,
             detail="No Instagram Professional account linked to your Pages",
