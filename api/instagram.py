@@ -152,20 +152,23 @@ async def exchange(
     app_secret = settings.facebook_app_secret
 
     # 1. Exchange code -> short-lived user token.
-    # Standard Facebook OAuth (no FBL) requires redirect_uri to match the one
-    # the JS SDK used in the dialog. The SDK uses the current page URL when
-    # response_type=code + override_default_response_type=true, so we forward
-    # whatever the client sent. For FBL (config_id present), Meta infers
-    # redirect_uri from config_id and rejects if we pass one — skip it.
+    # For standard OAuth (no FBL), the JS SDK uses
+    # https://www.facebook.com/connect/login_success.html as the dialog's
+    # redirect_uri regardless of any redirect_uri we pass. Meta records that
+    # URL and rejects the exchange if we don't send the same value. For FBL
+    # (config_id present) Meta infers redirect_uri from config_id and rejects
+    # when one is provided — skip it.
     token_params = {
         "client_id": app_id,
         "client_secret": app_secret,
         "code": code,
     }
-    if not config_id and redirect_uri:
-        token_params["redirect_uri"] = redirect_uri
     if config_id:
         token_params["config_id"] = config_id
+    else:
+        token_params["redirect_uri"] = (
+            "https://www.facebook.com/connect/login_success.html"
+        )
     token_resp = await _graph_get("/oauth/access_token", token_params)
     if "access_token" not in token_resp:
         raise HTTPException(
