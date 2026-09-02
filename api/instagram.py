@@ -11,6 +11,7 @@ to one of the user's Facebook Pages instead of WABA + phone. Flow:
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -180,35 +181,32 @@ async def exchange(
     long_token = long_resp["access_token"]
     expires_in = long_resp.get("expires_in", 5184000)
 
-    # 3. Resolve pages user manages.
+    # 3. Resolve the IG-linked Page.
     # /me/accounts with the user token requires pages_show_list (or legacy
-    # manage_pages) which isn't always granted by the Embedded Signup scopes
-    # we request. Fall back to the system-user page access token so we can
-    # still resolve the IG-linked page without depending on user-level scopes.
-    me_resp = await _graph_get("/me/accounts", {"access_token": long_token})
-    pages = me_resp.get("data") or []
-    print(f"[ig.exchange] /me/accounts user_count={len(pages)} tenant={ctx.tenant_id}", flush=True)
-
-    if not pages:
-        # System-user fallback: use the configured page access token to
-        # discover the IG Professional account via /{page_id}.
-        page_token = settings.facebook_page_access_token
-        # Try /me first (system user "me" returns the business/page it
-        # represents when called with a page access token).
-        try:
-            probe = await _graph_get("/me/accounts", {"access_token": page_token, "limit": 50})
-            pages = probe.get("data") or []
-            print(
-                f"[ig.exchange] /me/accounts sysuser_count={len(pages)} tenant={ctx.tenant_id} "
-                f"raw={probe}",
-                flush=True,
-            )
-        except httpx.HTTPError as e:
-            print(f"[ig.exchange] sysuser_probe_failed: {e}", flush=True)
+    # manage_pages) which isn't granted by the Embedded Signup scopes we
+    # request. And FACEBOOK_PAGE_ACCESS_TOKEN is a *page* access token, not a
+    # system user token, so /me/accounts returns [] there too. For single-
+    # tenant onboarding we look up the page directly by id; multi-tenant
+    # requires storing per-tenant page_id (TODO: tenant.facebook_page_id).
+    page_id_env = os.getenv("INSTAGRAM_PAGE_ID", "")
+    if page_id_env:
+        pages = [{"id": page_id_env}]
+        print(f"[ig.exchange] using INSTAGRAM_PAGE_ID={page_id_env}", flush=True)
+    else:
+        # Last resort: try user token's /me/accounts anyway.
+        me_resp = await _graph_get("/me/accounts", {"access_token": long_token})
+        pages = me_resp.get("data") or []
+        print(
+            f"[ig.exchange] /me/accounts user_count={len(pages)} tenant={ctx.tenant_id}",
+            flush=True,
+        )
         if not pages:
             raise HTTPException(
                 status_code=400,
-                detail="No Facebook Pages found for this account",
+                detail=(
+                    "No Facebook Pages found for this account. Set "
+                    "INSTAGRAM_PAGE_ID env var to bypass /me/accounts."
+                ),
             )
 
     # 4. Find a Page with a linked Instagram Professional account
