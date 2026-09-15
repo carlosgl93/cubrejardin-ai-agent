@@ -118,16 +118,109 @@ async def _get_waba_info(
     }
 
 
+async def _discover_ig_account(
+    token: str,
+    client: httpx.AsyncClient,
+    hinted_page_id: str = "",
+    hinted_ig_user_id: str = "",
+) -> Dict[str, Any]:
+    """Find the IG business account linked to the user's page.
+
+    Strategy:
+      1. If sessionInfoListener surfaced page_id + ig_user_id, trust them.
+      2. Else query /me/accounts with `fields=id,name,access_token,
+         instagram_business_account{id,username}`. Pick first page that has
+         an IG business account attached.
+
+    Returns dict with page_id, page_access_token, ig_user_id, or empty
+    values if IG scoping wasn't granted / no IG account found.
+    """
+    if hinted_page_id and hinted_ig_user_id:
+        # Reuse the same long-lived user token as a page-scoped token if it
+        # has `pages_show_list`; otherwise we need to ask Meta to surface one.
+        return {
+            "page_id": hinted_page_id,
+            "ig_user_id": hinted_ig_user_id,
+            "page_access_token": "",  # backend caller can choose to use token
+            "source": "sessionInfoListener",
+        }
+
+    try:
+        resp = await client.get(
+            f"{META_GRAPH_URL}/me/accounts",
+            params={
+                "access_token": token,
+                "fields": "id,name,access_token,instagram_business_account{id,username}",
+            },
+        )
+        if resp.status_code != 200:
+            return {"page_id": "", "ig_user_id": "", "page_access_token": "", "source": "error"}
+        data = resp.json().get("data", [])
+        for page in data:
+            ig_obj = page.get("instagram_business_account")
+            if ig_obj and ig_obj.get("id"):
+                return {
+                    "page_id": page["id"],
+                    "ig_user_id": ig_obj["id"],
+                    "page_access_token": page.get("access_token", ""),
+                    "source": "me_accounts",
+                }
+    except Exception:
+        pass
+    return {"page_id": "", "ig_user_id": "", "page_access_token": "", "source": "not_found"}
+
+
+async def _persist_ig_credentials(
+    tenant_id: str,
+    page_id: str,
+    ig_user_id: str,
+    page_access_token: str,
+    long_token: str,
+    expires_at_iso: Optional[str],
+) -> bool:
+    """Upsert row in tenant_instagram_credentials. Returns True on success."""
+    if not (page_id and ig_user_id):
+        return False
+    sb = get_supabase_client()
+    # Prefer the page-scoped token from /me/accounts; fall back to the
+    # long-lived user token (page-scoped tokens inherit page-level scopes
+    # granted through /me/accounts and don't inherit user scopes otherwise).
+    effective_token = page_access_token or long_token
+    row: Dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "page_id": page_id,
+        "ig_user_id": ig_user_id,
+        "page_access_token": effective_token,
+        "status": "active",
+        "raw_oauth_response": {
+            "source": "facebook_auth.exchange",
+            "ig_granted_via": "wa_fbl_popup_scopes",
+        },
+    }
+    if expires_at_iso:
+        row["token_expires_at"] = expires_at_iso
+    try:
+        sb.table("tenant_instagram_credentials").upsert(
+            row, on_conflict="tenant_id"
+        ).execute()
+        return True
+    except Exception:
+        return False
+
+
 async def exchange_facebook_code_to_credentials(
     code: str,
     tenant_id: str,
     waba_id: str = "",
     phone_number_id: str = "",
+    page_id: str = "",
+    ig_user_id: str = "",
 ) -> Dict[str, Any]:
-    """Exchange Meta OAuth code, resolve WABA + phone, persist WA credentials.
+    """Exchange Meta OAuth code, resolve WABA + phone, persist WA + IG credentials.
 
     Returns dict with keys:
-        access_token, waba_id, phone_number_id, token_expires_at, status
+        access_token, waba_id, phone_number_id, token_expires_at, status,
+        instagram_connected, page_id, ig_user_id
     """
     async with httpx.AsyncClient(timeout=30.0) as http:
         access_token, expires_in = await _exchange_code_for_token(code, http)
@@ -192,10 +285,39 @@ async def exchange_facebook_code_to_credentials(
         saved_waba_id = waba_info["waba_id"]
         saved_phone_id = waba_info["phone_number_id"]
 
+    # IG credentials: piggyback on the same OAuth. The dialog already grants
+    # instagram_basic + instagram_manage_engagement + pages_messaging; this
+    # call discovers the IG business account linked to the user's page.
+    ig_info = await _discover_ig_simple(access_token, page_id, ig_user_id)
+
+    ig_persisted = False
+    if ig_info["page_id"] and ig_info["ig_user_id"]:
+        ig_persisted = await _persist_ig_credentials(
+            tenant_id=tenant_id,
+            page_id=ig_info["page_id"],
+            ig_user_id=ig_info["ig_user_id"],
+            page_access_token=ig_info.get("page_access_token", ""),
+            long_token=access_token,
+            expires_at_iso=token_expires_at,
+        )
+
     return {
         "access_token": access_token,
         "waba_id": saved_waba_id,
         "phone_number_id": saved_phone_id,
         "token_expires_at": token_expires_at,
         "status": "active",
+        "instagram_connected": ig_persisted,
+        "page_id": ig_info.get("page_id", ""),
+        "ig_user_id": ig_info.get("ig_user_id", ""),
     }
+
+
+async def _discover_ig_simple(
+    token: str, hinted_page_id: str = "", hinted_ig_user_id: str = ""
+) -> Dict[str, Any]:
+    """Stand-alone IG discoverer. Re-opens its own httpx client."""
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        return await _discover_ig_account(
+            token, http, hinted_page_id, hinted_ig_user_id
+        )

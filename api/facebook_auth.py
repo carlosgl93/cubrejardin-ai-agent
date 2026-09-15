@@ -22,6 +22,8 @@ class ExchangeCodeRequest(BaseModel):
     auth_code: str
     waba_id: str = ""
     phone_number_id: str = ""
+    page_id: str = ""
+    ig_user_id: str = ""
 
 
 class ExchangeCodeResponse(BaseModel):
@@ -29,6 +31,9 @@ class ExchangeCodeResponse(BaseModel):
     waba_id: str
     phone_number_id: str
     status: str
+    instagram_connected: bool = False
+    page_id: str = ""
+    ig_user_id: str = ""
 
 
 @router.post("/exchange", response_model=ExchangeCodeResponse)
@@ -36,16 +41,27 @@ async def exchange_facebook_code(
     body: ExchangeCodeRequest,
     ctx: TenantContext = Depends(get_tenant_context),
 ) -> ExchangeCodeResponse:
-    """Exchange a Facebook auth code for a WhatsApp Business access token."""
+    """Exchange a Facebook auth code for WA + IG credentials.
+
+    Single popup collects permissions for both channels; backend persists
+    whichever it can resolve. If IG scopes aren't granted, ``instagram_connected``
+    comes back false and the IG card in OnboardingWizard stays disconnected
+    so the customer can retry with IG scopes enabled.
+    """
     creds = await exchange_facebook_code_to_credentials(
         code=body.auth_code,
         tenant_id=ctx.tenant_id,
         waba_id=body.waba_id,
         phone_number_id=body.phone_number_id,
+        page_id=body.page_id,
+        ig_user_id=body.ig_user_id,
     )
     return ExchangeCodeResponse(
         tenant_id=ctx.tenant_id,
         waba_id=creds["waba_id"],
         phone_number_id=creds["phone_number_id"],
         status=creds["status"],
+        instagram_connected=creds.get("instagram_connected", False),
+        page_id=creds.get("page_id", ""),
+        ig_user_id=creds.get("ig_user_id", ""),
     )
