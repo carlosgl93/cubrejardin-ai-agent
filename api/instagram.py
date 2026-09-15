@@ -160,9 +160,10 @@ async def exchange(
     # 1. Exchange code -> short-lived user token.
     # For standard OAuth (no FBL), FB.login locks redirect_uri to the page
     # origin at popup time. Frontend MUST mirror the same URL here or Meta
-    # rejects with 191 "domain of this URL isn't included in the app's
-    # domains". For FBL (config_id present) Meta infers redirect_uri from
-    # config_id and rejects when one is provided — skip it.
+    # rejects with 191. For FBL configs with User access token type, Meta
+    # ALSO requires redirect_uri (rejects with 36008 "redirect_uri is
+    # identical" if omitted). System-user configs tolerate omission, but
+    # sending redirect_uri is harmless.
     token_params = {
         "client_id": app_id,
         "client_secret": app_secret,
@@ -170,9 +171,12 @@ async def exchange(
     }
     if config_id:
         token_params["config_id"] = config_id
+        # Frontend sends the page-origin URL that FB.login captured.
+        token_params["redirect_uri"] = (
+            redirect_uri
+            or "https://www.facebook.com/connect/login_success.html"
+        )
     else:
-        # Frontend sends the actual page-origin URL that FB.login used.
-        # Fall back only if frontend omitted it (defensive — should not happen).
         token_params["redirect_uri"] = (
             redirect_uri
             or "https://www.facebook.com/connect/login_success.html"
