@@ -291,13 +291,29 @@ async def exchange(
             flush=True,
         )
         if not pages:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "No IG-linked Page found. Set INSTAGRAM_IG_USER_ID env "
-                    "var with the IG business account id to bypass."
-                ),
-            )
+            # Long-lived token from this FBL config is a system-user token
+            # (config's type=System-user access token) and can't query
+            # user-scoped data like /{INSTAGRAM_IG_USER_ID}. Fall back to
+            # FACEBOOK_PAGE_ACCESS_TOKEN (sgcloudadmin system user) which
+            # owns Page INSTAGRAM_PAGE_ID and can read its IG link. Single-
+            # tenant path; multi-tenant needs per-tenant page tokens.
+            page_id_env = os.getenv("INSTAGRAM_PAGE_ID", "")
+            page_token = settings.facebook_page_access_token
+            if page_id_env and page_token:
+                print(
+                    f"[ig.exchange] using FACEBOOK_PAGE_ACCESS_TOKEN to probe "
+                    f"page {page_id_env} for IG link",
+                    flush=True,
+                )
+                pages = [{"id": page_id_env, "access_token": page_token}]
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "No IG-linked Page found. Set INSTAGRAM_IG_USER_ID env "
+                        "var with the IG business account id to bypass."
+                    ),
+                )
 
     # 4. Find a Page with a linked Instagram Professional account
     ig_user_id: Optional[str] = None
