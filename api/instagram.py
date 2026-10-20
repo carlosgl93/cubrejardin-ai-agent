@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from api.tenant_context import TenantContext, get_tenant_context
 from channels.instagram import GRAPH_BASE
 from config.settings import get_settings
+from services.facebook_auth import subscribe_page_to_app
 
 router = APIRouter(prefix="/api/instagram", tags=["instagram"])
 
@@ -212,10 +213,22 @@ async def exchange(
     if payload.page_id and payload.ig_user_id:
         settings = get_settings()
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-        # Use FACEBOOK_PAGE_ACCESS_TOKEN (sgcloudadmin system user) — that
-        # user already owns the Page 1028203907040559. The FBL long_token
-        # belongs to "Agents-Whtsapp System User" which has empty /me/accounts.
-        page_access_token = settings.facebook_page_access_token
+
+        # Try to resolve a page-scoped access token using long_token
+        page_access_token = ""
+        try:
+            page_query = await _graph_get(
+                f"/{payload.page_id}",
+                {"fields": "access_token", "access_token": long_token},
+            )
+            page_access_token = page_query.get("access_token", "")
+        except Exception:
+            pass
+
+        # Fall back to settings.facebook_page_access_token if user token doesn't manage page
+        if not page_access_token:
+            page_access_token = settings.facebook_page_access_token
+
         row = {
             "ig_user_id": payload.ig_user_id,
             "page_id": payload.page_id,
@@ -240,6 +253,11 @@ async def exchange(
             })
         else:
             _supabase_upsert_ig_creds(ctx.tenant_id, row)
+
+        # Subscribe page to webhooks for inbound DMs
+        if page_access_token:
+            await subscribe_page_to_app(payload.page_id, page_access_token)
+
         print(
             f"[ig.exchange] fbl_fast_path tenant={ctx.tenant_id} "
             f"page_id={payload.page_id} ig_user_id={payload.ig_user_id}",
@@ -375,6 +393,10 @@ async def exchange(
         })
     else:
         _supabase_upsert_ig_creds(ctx.tenant_id, row)
+
+    # Subscribe page to webhooks for inbound DMs
+    if page_access_token:
+        await subscribe_page_to_app(page_id, page_access_token)
 
     return ExchangeInstagramCodeResponse(
         ig_user_id=ig_user_id,

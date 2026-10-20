@@ -141,6 +141,7 @@ async def test_webhook_fallback_sends_template(monkeypatch: pytest.MonkeyPatch) 
     orchestrator = DummyOrchestrator(template_service=template_service)
 
     monkeypatch.setattr(webhooks, "_validate_whatsapp_signature", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(webhooks, "_get_active_handoff", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         webhooks,
         "_resolve_tenant_credentials",

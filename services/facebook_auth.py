@@ -19,6 +19,79 @@ from config.supabase import get_supabase_client
 META_GRAPH_URL = "https://graph.facebook.com/v21.0"
 
 
+async def subscribe_waba_to_app(
+    waba_id: str, access_token: str, client: Optional[httpx.AsyncClient] = None
+) -> bool:
+    """Subscribe our Meta App to receive webhooks for this WABA.
+    
+    Required for Meta to forward inbound WhatsApp webhook events to our callback URL.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    url = f"{META_GRAPH_URL}/{waba_id}/subscribed_apps"
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    async def _post(c: httpx.AsyncClient) -> bool:
+        resp = await c.post(url, headers=headers)
+        if resp.status_code == 200 and resp.json().get("success"):
+            logger.info("Successfully subscribed Meta App to WABA %s", waba_id)
+            return True
+        logger.warning(
+            "Failed to subscribe Meta App to WABA %s: status=%d body=%s",
+            waba_id,
+            resp.status_code,
+            resp.text,
+        )
+        return False
+
+    try:
+        if client:
+            return await _post(client)
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            return await _post(c)
+    except Exception as exc:
+        logger.error("Error subscribing Meta App to WABA %s: %s", waba_id, exc)
+        return False
+
+
+async def subscribe_page_to_app(
+    page_id: str, page_access_token: str, client: Optional[httpx.AsyncClient] = None
+) -> bool:
+    """Subscribe our Meta App to receive webhooks for this Facebook Page / IG.
+    
+    Required for Meta to forward inbound Messenger / Instagram DM webhooks.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    url = f"{META_GRAPH_URL}/{page_id}/subscribed_apps"
+    headers = {"Authorization": f"Bearer {page_access_token}"}
+    params = {"subscribed_fields": "messages,messaging_postbacks,message_reactions"}
+
+    async def _post(c: httpx.AsyncClient) -> bool:
+        resp = await c.post(url, headers=headers, params=params)
+        if resp.status_code == 200 and resp.json().get("success"):
+            logger.info("Successfully subscribed Meta App to Page %s", page_id)
+            return True
+        logger.warning(
+            "Failed to subscribe Meta App to Page %s: status=%d body=%s",
+            page_id,
+            resp.status_code,
+            resp.text,
+        )
+        return False
+
+    try:
+        if client:
+            return await _post(client)
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            return await _post(c)
+    except Exception as exc:
+        logger.error("Error subscribing Meta App to Page %s: %s", page_id, exc)
+        return False
+
+
 async def _exchange_code_for_token(
     auth_code: str, client: httpx.AsyncClient
 ) -> Tuple[str, Optional[int]]:
@@ -203,6 +276,8 @@ async def _persist_ig_credentials(
         sb.table("tenant_instagram_credentials").upsert(
             row, on_conflict="tenant_id"
         ).execute()
+        if effective_token:
+            await subscribe_page_to_app(page_id, effective_token)
         return True
     except Exception:
         return False
@@ -284,6 +359,10 @@ async def exchange_facebook_code_to_credentials(
         ).execute()
         saved_waba_id = waba_info["waba_id"]
         saved_phone_id = waba_info["phone_number_id"]
+
+    # Subscribe WABA to app webhooks so Meta starts routing inbound messages
+    if saved_waba_id and access_token:
+        await subscribe_waba_to_app(saved_waba_id, access_token)
 
     # IG credentials: piggyback on the same OAuth. The dialog already grants
     # instagram_basic + instagram_manage_engagement + pages_messaging; this
