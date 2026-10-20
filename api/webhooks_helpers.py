@@ -65,6 +65,42 @@ def resolve_tenant_for_instagram(payload: dict) -> str:
     return res.data["tenant_id"]
 
 
+def resolve_tenant_for_messenger(payload: dict) -> str:
+    """Resolve tenant_id from a Facebook Messenger (Page) webhook payload.
+
+    Looks up ``page_id`` (from ``entry[0].id``) against active rows of
+    ``tenant_messenger_credentials``, and falls back to ``tenant_instagram_credentials``.
+    """
+
+    page_id = payload["entry"][0]["id"]
+    supabase = get_supabase_client()
+    res = (
+        supabase.table("tenant_messenger_credentials")
+        .select("tenant_id")
+        .eq("page_id", page_id)
+        .eq("status", "active")
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    if res and res.data:
+        return res.data["tenant_id"]
+
+    res_ig = (
+        supabase.table("tenant_instagram_credentials")
+        .select("tenant_id")
+        .eq("page_id", page_id)
+        .eq("status", "active")
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    if res_ig and res_ig.data:
+        return res_ig.data["tenant_id"]
+
+    raise ValueError(f"No tenant for Messenger page {page_id}")
+
+
 def persist_conversation_message(
     *,
     tenant_id: str,
@@ -134,6 +170,13 @@ async def run_bot_pipeline(
                 recipient_id=channel_user_id,
                 text=text,
                 tenant_id=tenant_id,
+            )
+            persist_conversation_message(
+                tenant_id=tenant_id,
+                channel=channel,
+                channel_user_id=channel_user_id,
+                role="assistant",
+                message=text,
             )
     finally:
         try:

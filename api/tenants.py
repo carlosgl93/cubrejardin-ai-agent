@@ -22,6 +22,7 @@ class TenantResponse(BaseModel):
     plan: str
     whatsapp_connected: bool = False
     instagram_connected: bool = False
+    messenger_connected: bool = False
 
 
 def _fetch_whatsapp_state(tenant_id: str) -> dict:
@@ -60,6 +61,36 @@ def _fetch_instagram_state(tenant_id: str) -> dict:
         return {"instagram_connected": res.data.get("status") == "active"}
     except Exception:
         return {"instagram_connected": False}
+
+
+def _fetch_messenger_state(tenant_id: str) -> dict:
+    """Return whether the tenant has an active Messenger credential row."""
+    supabase = get_supabase_client()
+    try:
+        res = (
+            supabase.table("tenant_messenger_credentials")
+            .select("status")
+            .eq("tenant_id", tenant_id)
+            .limit(1)
+            .maybe_single()
+            .execute()
+        )
+        if res and getattr(res, "data", None) and res.data.get("status") == "active":
+            return {"messenger_connected": True}
+        # Fallback: active IG page also serves Messenger
+        res_ig = (
+            supabase.table("tenant_instagram_credentials")
+            .select("status")
+            .eq("tenant_id", tenant_id)
+            .limit(1)
+            .maybe_single()
+            .execute()
+        )
+        if res_ig and getattr(res_ig, "data", None):
+            return {"messenger_connected": res_ig.data.get("status") == "active"}
+        return {"messenger_connected": False}
+    except Exception:
+        return {"messenger_connected": False}
 
 
 @router.post("/", response_model=TenantResponse, status_code=status.HTTP_201_CREATED)
@@ -133,6 +164,7 @@ async def get_my_tenant(
     t = result.data
     wa_state = _fetch_whatsapp_state(ctx.tenant_id)
     ig_state = _fetch_instagram_state(ctx.tenant_id)
+    msg_state = _fetch_messenger_state(ctx.tenant_id)
     return TenantResponse(
         id=t["id"],
         name=t["name"],
@@ -140,6 +172,7 @@ async def get_my_tenant(
         plan=t.get("plan", "free"),
         whatsapp_connected=wa_state["whatsapp_connected"],
         instagram_connected=ig_state["instagram_connected"],
+        messenger_connected=msg_state["messenger_connected"],
     )
 
 

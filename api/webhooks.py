@@ -18,6 +18,7 @@ from api.dependencies import get_facebook_messenger_service, get_openai_service,
 from api.webhooks_helpers import (
     persist_conversation_message as _persist_conversation_message,
     resolve_tenant_for_instagram as _resolve_tenant_for_instagram,
+    resolve_tenant_for_messenger as _resolve_tenant_for_messenger,
     resolve_tenant_for_whatsapp as _resolve_tenant_for_whatsapp,
     run_bot_pipeline as _run_bot_pipeline,
 )
@@ -475,8 +476,27 @@ async def whatsapp_webhook(
 
 
 # ============================================================================
-# Unified webhook router (WhatsApp Business + Instagram)
+# Unified webhook router (WhatsApp Business + Instagram + Facebook Page Messenger)
 # ============================================================================
+
+
+@router.get("")
+async def verify_unified_webhook(
+    hub_mode: str = Query(alias="hub.mode"),
+    hub_challenge: str = Query(alias="hub.challenge"),
+    hub_verify_token: str = Query(alias="hub.verify_token"),
+) -> PlainTextResponse:
+    """Unified Meta verification callback for Webhook root."""
+
+    valid_tokens = {
+        settings.whatsapp_webhook_verify_token,
+        settings.facebook_messenger_verify_token,
+    }
+    if hub_mode == "subscribe" and hub_verify_token in valid_tokens:
+        logger.info("unified_webhook_verified")
+        return PlainTextResponse(hub_challenge)
+    logger.warning("unified_webhook_verify_failed")
+    raise HTTPException(status_code=403, detail="Invalid verify token")
 
 
 @router.post("")
@@ -484,7 +504,7 @@ async def unified_webhook(
     request: Request,
     x_hub_signature_256: str = Header(default=""),
 ) -> dict:
-    """Unified entry for ``object: whatsapp-business-account`` and ``object: instagram``.
+    """Unified entry for ``whatsapp-business-account``, ``instagram``, and ``page``.
 
     Dispatches based on ``payload["object"]`` to the matching channel adapter,
     persists the inbound message under ``channel=<adapter name>``, and routes
@@ -504,7 +524,7 @@ async def unified_webhook(
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     object_type = payload.get("object")
-    if object_type == "whatsapp-business-account":
+    if object_type in ("whatsapp_business_account", "whatsapp-business-account"):
         channel = "whatsapp"
         try:
             tenant_id = _resolve_tenant_for_whatsapp(payload)
@@ -515,6 +535,13 @@ async def unified_webhook(
         channel = "instagram"
         try:
             tenant_id = _resolve_tenant_for_instagram(payload)
+        except (ValueError, KeyError) as exc:
+            logger.warning("webhook_tenant_resolution_failed", extra={"channel": channel, "error": str(exc)})
+            return {"status": "ignored", "reason": "unknown_tenant"}
+    elif object_type == "page":
+        channel = "messenger"
+        try:
+            tenant_id = _resolve_tenant_for_messenger(payload)
         except (ValueError, KeyError) as exc:
             logger.warning("webhook_tenant_resolution_failed", extra={"channel": channel, "error": str(exc)})
             return {"status": "ignored", "reason": "unknown_tenant"}

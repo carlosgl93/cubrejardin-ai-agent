@@ -320,6 +320,41 @@ async def _persist_ig_credentials(
         return False
 
 
+async def _persist_messenger_credentials(
+    tenant_id: str,
+    page_id: str,
+    page_access_token: str,
+    long_token: str,
+    expires_at_iso: Optional[str],
+) -> bool:
+    """Upsert row in tenant_messenger_credentials. Returns True on success."""
+    if not page_id:
+        return False
+    sb = get_supabase_client()
+    effective_token = page_access_token or long_token
+    row: Dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "page_id": page_id,
+        "page_access_token": effective_token,
+        "status": "active",
+        "raw_oauth_response": {
+            "source": "facebook_auth.exchange",
+            "messenger_granted_via": "wa_fbl_popup_scopes",
+        },
+    }
+    if expires_at_iso:
+        row["token_expires_at"] = expires_at_iso
+    try:
+        sb.table("tenant_messenger_credentials").upsert(
+            row, on_conflict="tenant_id"
+        ).execute()
+        if effective_token:
+            await subscribe_page_to_app(page_id, effective_token)
+        return True
+    except Exception:
+        return False
+
+
 async def exchange_facebook_code_to_credentials(
     code: str,
     tenant_id: str,
@@ -431,6 +466,16 @@ async def exchange_facebook_code_to_credentials(
             expires_at_iso=token_expires_at,
         )
 
+    messenger_persisted = False
+    if ig_info.get("page_id"):
+        messenger_persisted = await _persist_messenger_credentials(
+            tenant_id=tenant_id,
+            page_id=ig_info["page_id"],
+            page_access_token=ig_info.get("page_access_token", ""),
+            long_token=access_token,
+            expires_at_iso=token_expires_at,
+        )
+
     return {
         "access_token": access_token,
         "waba_id": saved_waba_id,
@@ -438,6 +483,7 @@ async def exchange_facebook_code_to_credentials(
         "token_expires_at": token_expires_at,
         "status": "active",
         "instagram_connected": ig_persisted,
+        "messenger_connected": messenger_persisted,
         "page_id": ig_info.get("page_id", ""),
         "ig_user_id": ig_info.get("ig_user_id", ""),
     }

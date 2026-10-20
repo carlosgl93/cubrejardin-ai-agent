@@ -25,10 +25,13 @@ class FacebookMessengerService:
     def __init__(
         self,
         *,
+        token: Optional[str] = None,
+        page_id: Optional[str] = None,
         client: Optional[httpx.AsyncClient] = None,
         session_factory: Optional[Callable[[], InMemorySession]] = None,
     ) -> None:
-        self.token = settings.facebook_messenger_page_token
+        self.token = token or settings.facebook_messenger_page_token
+        self.page_id = page_id
         self.app_secret = settings.facebook_app_secret
         if not self.token:
             raise ValueError("Facebook Messenger page token is required")

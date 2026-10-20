@@ -12,6 +12,7 @@ from .telegram_webhook import router as telegram_router
 from .handoffs import router as handoffs_router
 from .backoffice import router as backoffice_router
 from .instagram import router as instagram_router
+from .messenger import router as messenger_router
 from .conversations import router as conversations_router
 
 api_router = APIRouter()
@@ -25,6 +26,7 @@ api_router.include_router(telegram_router, prefix="/webhook", tags=["telegram"])
 api_router.include_router(handoffs_router, prefix="/api/handoffs", tags=["handoffs"])
 api_router.include_router(backoffice_router, prefix="/api/backoffice", tags=["backoffice"])
 api_router.include_router(instagram_router)
+api_router.include_router(messenger_router)
 api_router.include_router(conversations_router)
 
 __all__ = ["api_router"]

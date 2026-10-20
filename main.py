@@ -25,9 +25,11 @@ app.include_router(api_router)
 from channels.registry import register_adapter
 from channels.whatsapp import WhatsAppAdapter
 from channels.instagram import InstagramAdapter
+from channels.messenger import MessengerAdapter
 
 register_adapter(WhatsAppAdapter())
 register_adapter(InstagramAdapter())
+register_adapter(MessengerAdapter())
 
 
 @app.get("/")
