@@ -19,6 +19,43 @@ from config.supabase import get_supabase_client
 META_GRAPH_URL = "https://graph.facebook.com/v21.0"
 
 
+async def register_phone_number(
+    phone_number_id: str, access_token: str, client: Optional[httpx.AsyncClient] = None
+) -> bool:
+    """Register phone number with Meta Cloud API (2-step verification PIN).
+
+    Required by Meta before a newly onboarded number can send messages (error 133010).
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    url = f"{META_GRAPH_URL}/{phone_number_id}/register"
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    payload = {"messaging_product": "whatsapp", "pin": "123456"}
+
+    async def _post(c: httpx.AsyncClient) -> bool:
+        resp = await c.post(url, headers=headers, json=payload)
+        if resp.status_code == 200 and resp.json().get("success"):
+            logger.info("Successfully registered phone_number_id %s with Cloud API", phone_number_id)
+            return True
+        logger.warning(
+            "Failed to register phone_number_id %s: status=%d body=%s",
+            phone_number_id,
+            resp.status_code,
+            resp.text,
+        )
+        return False
+
+    try:
+        if client:
+            return await _post(client)
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            return await _post(c)
+    except Exception as exc:
+        logger.error("Error registering phone_number_id %s: %s", phone_number_id, exc)
+        return False
+
+
 async def subscribe_waba_to_app(
     waba_id: str, access_token: str, client: Optional[httpx.AsyncClient] = None
 ) -> bool:
@@ -331,14 +368,24 @@ async def exchange_facebook_code_to_credentials(
     )
 
     if already_active:
-        update_payload: Dict[str, Any] = {"access_token": access_token}
+        update_payload: Dict[str, Any] = {
+            "access_token": access_token,
+            "whatsapp_business_account_id": waba_info["waba_id"],
+            "phone_number_id": waba_info["phone_number_id"],
+            "status": "active",
+            "raw_oauth_response": {
+                "waba_id": waba_info["waba_id"],
+                "phone_number_id": waba_info["phone_number_id"],
+                "display_phone_number": waba_info.get("display_phone_number", ""),
+            },
+        }
         if token_expires_at is not None:
             update_payload["token_expires_at"] = token_expires_at
         sb.table("tenant_whatsapp_credentials").update(update_payload).eq(
             "tenant_id", tenant_id
         ).execute()
-        saved_waba_id = existing.data[0]["whatsapp_business_account_id"]
-        saved_phone_id = existing.data[0]["phone_number_id"]
+        saved_waba_id = waba_info["waba_id"]
+        saved_phone_id = waba_info["phone_number_id"]
     else:
         upsert_payload: Dict[str, Any] = {
             "tenant_id": tenant_id,
@@ -359,6 +406,10 @@ async def exchange_facebook_code_to_credentials(
         ).execute()
         saved_waba_id = waba_info["waba_id"]
         saved_phone_id = waba_info["phone_number_id"]
+
+    # Register phone number with Cloud API so it can send messages (prevents error 133010)
+    if saved_phone_id and access_token:
+        await register_phone_number(saved_phone_id, access_token)
 
     # Subscribe WABA to app webhooks so Meta starts routing inbound messages
     if saved_waba_id and access_token:
