@@ -247,21 +247,35 @@ async def whatsapp_webhook(
             try:
                 messages = change.value.messages or []
                 for msg in messages:
+                    user_number = msg.from_
+                    body_text = ""
+
                     if msg.type == "text" and msg.text:
-                        user_number = msg.from_
-                        body_text = msg.text.get("body", "")
+                        body_text = (msg.text.get("body") or "").strip()
                         if not body_text:
                             continue
-                        if await orchestrator.has_processed_message(msg.id):
+                    elif msg.type == "interactive" and msg.interactive:
+                        reply_data = (
+                            msg.interactive.get("button_reply")
+                            or msg.interactive.get("list_reply")
+                            or {}
+                        )
+                        body_text = (reply_data.get("title") or "").strip()
+                        if not body_text:
                             continue
+                    else:
+                        # Non-text media message (audio, voice, image, video, document, location, sticker, etc.)
+                        try:
+                            await wa_service.mark_as_read(msg.id)
+                        except Exception:
+                            pass
 
-                        # If user has an active handoff, forward to Telegram agent
                         active_handoff = _get_active_handoff(user_number, tenant_id)
                         if active_handoff:
                             tg_fwd = TelegramService()
                             try:
                                 fwd_text = (
-                                    f"💬 <b>Usuario</b> <code>{user_number}</code>:\n{body_text}"
+                                    f"📎 <b>Usuario</b> <code>{user_number}</code> envió un archivo/mensaje de tipo <code>{msg.type}</code>."
                                 )
                                 await tg_fwd.send_message(
                                     active_handoff["telegram_chat_id"],
@@ -270,149 +284,189 @@ async def whatsapp_webhook(
                                 )
                             finally:
                                 await tg_fwd.close()
-                            sb_conv = get_supabase_client()
-                            sb_conv.table("conversations").insert({
-                                "tenant_id": tenant_id,
-                                "channel": "whatsapp",
-                                "channel_user_id": user_number,
-                                "role": "user",
-                                "message": body_text,
-                                "metadata": {"source": "whatsapp", "during_handoff": True},
-                            }).execute()
-                            sb_touch = get_supabase_client()
-                            sb_touch.table("handoffs").update({
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                                "message_count": (active_handoff.get("message_count") or 0) + 1,
-                            }).eq("id", active_handoff["id"]).execute()
-                            delivery_results.append({"tenant_id": tenant_id, "user": user_number, "status": "forwarded_to_agent"})
-                            continue
+                        else:
+                            try:
+                                await wa_service.send_text_message(
+                                    user_number,
+                                    "Por el momento solo puedo procesar mensajes de texto. Por favor, escríbeme tu consulta.",
+                                )
+                            except Exception as send_err:
+                                logger.warning(
+                                    "whatsapp_unsupported_media_reply_failed: %s",
+                                    send_err,
+                                    extra={"user": user_number, "message_id": msg.id},
+                                )
 
-                        logger.info(
-                            "whatsapp_message_received",
-                            extra={
-                                "tenant_id": tenant_id,
-                                "from": user_number,
-                                "phone_number": user_number,
-                                "message_id": msg.id,
-                                "message_text": body_text[:100],
-                                "text": f"Message received from {user_number}",
-                            },
-                        )
-                        wa_service.record_incoming_interaction(
-                            user_number, timestamp=_parse_meta_timestamp(msg.timestamp)
-                        )
+                        delivery_results.append({
+                            "tenant_id": tenant_id,
+                            "user": user_number,
+                            "message_id": msg.id,
+                            "status": "unsupported_media_handled",
+                            "media_type": msg.type,
+                        })
+                        continue
 
+                    if await orchestrator.has_processed_message(msg.id):
+                        continue
+
+                    # If user has an active handoff, forward to Telegram agent
+                    active_handoff = _get_active_handoff(user_number, tenant_id)
+                    if active_handoff:
+                        tg_fwd = TelegramService()
                         try:
-                            await wa_service.mark_as_read(msg.id)
-                        except Exception as mark_read_error:
-                            logger.warning(
-                                f"whatsapp_mark_read_failed: {mark_read_error}",
-                                extra={"message_id": msg.id, "error": str(mark_read_error)},
+                            fwd_text = (
+                                f"💬 <b>Usuario</b> <code>{user_number}</code>:\n{body_text}"
                             )
+                            await tg_fwd.send_message(
+                                active_handoff["telegram_chat_id"],
+                                fwd_text,
+                                reply_to_message_id=active_handoff.get("telegram_message_id"),
+                            )
+                        finally:
+                            await tg_fwd.close()
+                        sb_conv = get_supabase_client()
+                        sb_conv.table("conversations").insert({
+                            "tenant_id": tenant_id,
+                            "channel": "whatsapp",
+                            "channel_user_id": user_number,
+                            "role": "user",
+                            "message": body_text,
+                            "metadata": {"source": "whatsapp", "during_handoff": True},
+                        }).execute()
+                        sb_touch = get_supabase_client()
+                        sb_touch.table("handoffs").update({
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                            "message_count": (active_handoff.get("message_count") or 0) + 1,
+                        }).eq("id", active_handoff["id"]).execute()
+                        delivery_results.append({"tenant_id": tenant_id, "user": user_number, "status": "forwarded_to_agent"})
+                        continue
 
-                        agent_response = await orchestrator.process_message(
-                            user_number, body_text, message_id=msg.id
+                    logger.info(
+                        "whatsapp_message_received",
+                        extra={
+                            "tenant_id": tenant_id,
+                            "from": user_number,
+                            "phone_number": user_number,
+                            "message_id": msg.id,
+                            "message_text": body_text[:100],
+                            "text": f"Message received from {user_number}",
+                        },
+                    )
+                    wa_service.record_incoming_interaction(
+                        user_number, timestamp=_parse_meta_timestamp(msg.timestamp)
+                    )
+
+                    try:
+                        await wa_service.mark_as_read(msg.id)
+                    except Exception as mark_read_error:
+                        logger.warning(
+                            f"whatsapp_mark_read_failed: {mark_read_error}",
+                            extra={"message_id": msg.id, "error": str(mark_read_error)},
                         )
-                        try:
-                            await wa_service.send_text_message(user_number, agent_response.message)
-                            delivery_results.append(
-                                {"tenant_id": tenant_id, "user": user_number, "message_id": msg.id, "status": "delivered"}
-                            )
-                        except OutsideMessagingWindowError as exc:
-                            logger.warning(
-                                "whatsapp_send_outside_window",
-                                extra={"user": user_number, "message_id": msg.id},
-                            )
-                            delivery_results.append(
-                                {
-                                    "tenant_id": tenant_id,
-                                    "user": user_number,
-                                    "message_id": msg.id,
-                                    "status": "outside_window",
-                                    "detail": str(exc),
-                                }
-                            )
-                            template = await orchestrator.handle_outside_window(user_number, agent_response)
-                            delivery_results.append(
-                                {
-                                    "tenant_id": tenant_id,
-                                    "user": user_number,
-                                    "message_id": msg.id,
-                                    "status": "template_sent",
-                                    "template": template,
-                                }
-                            )
-                        except httpx.HTTPStatusError as send_error:
-                            error_code, tech_msg, user_msg = _extract_meta_error(send_error)
-                            logger.error(
-                                f"whatsapp_send_failed: code={error_code} — {tech_msg}",
-                                extra={
-                                    "tenant_id": tenant_id,
-                                    "user": user_number,
-                                    "message_id": msg.id,
-                                    "meta_error_code": error_code,
-                                    "meta_error": tech_msg,
-                                },
-                            )
-                            delivery_results.append({
+
+                    agent_response = await orchestrator.process_message(
+                        user_number, body_text, message_id=msg.id
+                    )
+                    try:
+                        await wa_service.send_text_message(user_number, agent_response.message)
+                        delivery_results.append(
+                            {"tenant_id": tenant_id, "user": user_number, "message_id": msg.id, "status": "delivered"}
+                        )
+                    except OutsideMessagingWindowError as exc:
+                        logger.warning(
+                            "whatsapp_send_outside_window",
+                            extra={"user": user_number, "message_id": msg.id},
+                        )
+                        delivery_results.append(
+                            {
                                 "tenant_id": tenant_id,
                                 "user": user_number,
                                 "message_id": msg.id,
-                                "status": "send_failed",
+                                "status": "outside_window",
+                                "detail": str(exc),
+                            }
+                        )
+                        template = await orchestrator.handle_outside_window(user_number, agent_response)
+                        delivery_results.append(
+                            {
+                                "tenant_id": tenant_id,
+                                "user": user_number,
+                                "message_id": msg.id,
+                                "status": "template_sent",
+                                "template": template,
+                            }
+                        )
+                    except httpx.HTTPStatusError as send_error:
+                        error_code, tech_msg, user_msg = _extract_meta_error(send_error)
+                        logger.error(
+                            f"whatsapp_send_failed: code={error_code} — {tech_msg}",
+                            extra={
+                                "tenant_id": tenant_id,
+                                "user": user_number,
+                                "message_id": msg.id,
                                 "meta_error_code": error_code,
                                 "meta_error": tech_msg,
-                                "user_message": user_msg,
-                            })
-                            # On auth errors: mark credential as revoked and alert admin
-                            if error_code in _META_AUTH_ERRORS:
-                                try:
-                                    get_supabase_client().table("tenant_whatsapp_credentials") \
-                                        .update({"status": "revoked"}) \
-                                        .eq("tenant_id", tenant_id).execute()
-                                except Exception:
-                                    pass
-                                try:
-                                    tg = TelegramService()
-                                    await tg.send_message(
-                                        settings.telegram_agent_chat_id,
-                                        f"🚨 WhatsApp auth error — tenant {tenant_id}\n"
-                                        f"Código: {error_code}\n"
-                                        f"Error: {tech_msg}\n\n"
-                                        f"El tenant necesita reconectar su cuenta en /onboarding",
-                                    )
-                                    await tg.close()
-                                except Exception:
-                                    pass
-                            else:
-                                # Non-auth error: notify user in Spanish and alert admin
-                                try:
-                                    await wa_service.send_text_message(user_number, user_msg)
-                                except Exception:
-                                    pass
-                                try:
-                                    tg = TelegramService()
-                                    await tg.send_message(
-                                        settings.telegram_agent_chat_id,
-                                        f"⚠️ WhatsApp send error — {user_number} (tenant {tenant_id})\n"
-                                        f"Código: {error_code}\n"
-                                        f"Error: {tech_msg}",
-                                    )
-                                    await tg.close()
-                                except Exception:
-                                    pass
-                        except Exception as send_error:
-                            logger.error(
-                                "whatsapp_send_failed",
-                                extra={
-                                    "tenant_id": tenant_id,
-                                    "user": user_number,
-                                    "message_id": msg.id,
-                                    "error": str(send_error),
-                                },
-                            )
-                            delivery_results.append(
-                                {"tenant_id": tenant_id, "user": user_number, "message_id": msg.id, "status": "send_failed", "error": str(send_error)}
-                            )
+                            },
+                        )
+                        delivery_results.append({
+                            "tenant_id": tenant_id,
+                            "user": user_number,
+                            "message_id": msg.id,
+                            "status": "send_failed",
+                            "meta_error_code": error_code,
+                            "meta_error": tech_msg,
+                            "user_message": user_msg,
+                        })
+                        # On auth errors: mark credential as revoked and alert admin
+                        if error_code in _META_AUTH_ERRORS:
+                            try:
+                                get_supabase_client().table("tenant_whatsapp_credentials") \
+                                    .update({"status": "revoked"}) \
+                                    .eq("tenant_id", tenant_id).execute()
+                            except Exception:
+                                pass
+                            try:
+                                tg = TelegramService()
+                                await tg.send_message(
+                                    settings.telegram_agent_chat_id,
+                                    f"🚨 WhatsApp auth error — tenant {tenant_id}\n"
+                                    f"Código: {error_code}\n"
+                                    f"Error: {tech_msg}\n\n"
+                                    f"El tenant necesita reconectar su cuenta en /onboarding",
+                                )
+                                await tg.close()
+                            except Exception:
+                                pass
+                        else:
+                            # Non-auth error: notify user in Spanish and alert admin
+                            try:
+                                await wa_service.send_text_message(user_number, user_msg)
+                            except Exception:
+                                pass
+                            try:
+                                tg = TelegramService()
+                                await tg.send_message(
+                                    settings.telegram_agent_chat_id,
+                                    f"⚠️ WhatsApp send error — {user_number} (tenant {tenant_id})\n"
+                                    f"Código: {error_code}\n"
+                                    f"Error: {tech_msg}",
+                                )
+                                await tg.close()
+                            except Exception:
+                                pass
+                    except Exception as send_error:
+                        logger.error(
+                            "whatsapp_send_failed",
+                            extra={
+                                "tenant_id": tenant_id,
+                                "user": user_number,
+                                "message_id": msg.id,
+                                "error": str(send_error),
+                            },
+                        )
+                        delivery_results.append(
+                            {"tenant_id": tenant_id, "user": user_number, "message_id": msg.id, "status": "send_failed", "error": str(send_error)}
+                        )
             finally:
                 db.close()
                 await wa_service.close()
