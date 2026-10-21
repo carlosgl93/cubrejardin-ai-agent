@@ -277,22 +277,30 @@ async def exchange(
         except Exception as e:
             print(f"[ig.exchange] ig_user query failed: {e}", flush=True)
 
-    # 3d. Fallback: try /me/accounts with user long_token
-    if not page_id or not ig_user_id:
+    # 3d. Resolve page_access_token and linked IG via /me/accounts with user long_token
+    if not page_id or not ig_user_id or not page_access_token:
         try:
             me_resp = await _graph_get(
                 "/me/accounts",
                 {"access_token": long_token, "fields": "id,name,access_token,instagram_business_account"},
             )
             for p in me_resp.get("data", []):
-                if not page_id:
-                    page_id = str(p["id"])
-                    page_access_token = p.get("access_token", "")
-                igba = p.get("instagram_business_account")
-                if igba and not ig_user_id:
-                    ig_user_id = str(igba["id"])
-                    page_id = str(p["id"])
-                    page_access_token = p.get("access_token", "")
+                p_id = str(p["id"])
+                p_token = p.get("access_token", "")
+                p_ig = p.get("instagram_business_account", {}).get("id") if p.get("instagram_business_account") else None
+
+                if page_id and p_id == page_id:
+                    if p_token:
+                        page_access_token = p_token
+                    if p_ig:
+                        ig_user_id = str(p_ig)
+                    break
+                elif not page_id:
+                    page_id = p_id
+                    if p_token:
+                        page_access_token = p_token
+                    if p_ig:
+                        ig_user_id = str(p_ig)
                     break
         except Exception as e:
             print(f"[ig.exchange] /me/accounts failed: {e}", flush=True)
