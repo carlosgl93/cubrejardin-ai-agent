@@ -65,7 +65,8 @@ class InstagramAdapter(ChannelAdapter):
                 f"No active Instagram credentials for tenant '{tenant_id}'"
             )
 
-        url = f"{GRAPH_BASE}/me/messages"
+        target = creds.get("page_id") or creds.get("ig_user_id") or "me"
+        url = f"{GRAPH_BASE}/{target}/messages"
         headers = {
             "Authorization": f"Bearer {creds['page_access_token']}",
             "Content-Type": "application/json",

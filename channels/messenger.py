@@ -78,7 +78,8 @@ class MessengerAdapter(ChannelAdapter):
                 f"No active Messenger credentials for tenant '{tenant_id}'"
             )
 
-        url = f"{GRAPH_BASE}/me/messages"
+        page_target = creds.get("page_id") or "me"
+        url = f"{GRAPH_BASE}/{page_target}/messages"
         headers = {
             "Authorization": f"Bearer {creds['page_access_token']}",
             "Content-Type": "application/json",
