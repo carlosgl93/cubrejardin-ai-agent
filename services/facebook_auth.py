@@ -477,7 +477,19 @@ async def exchange_facebook_code_to_credentials(
 
     # Register phone number with Cloud API so it can send messages (prevents error 133010)
     if saved_phone_id and access_token:
-        await register_phone_number(saved_phone_id, access_token)
+        reg_ok = await register_phone_number(saved_phone_id, access_token)
+        # If the selected number fails registration (e.g. error 131037 display name
+        # pending review on Solaris Innovations), fall back to the pre-approved
+        # Meta test number if configured.
+        settings = get_settings()
+        if not reg_ok and settings.whatsapp_phone_number_id and settings.facebook_page_access_token:
+            saved_phone_id = settings.whatsapp_phone_number_id
+            saved_waba_id = settings.whatsapp_business_account_id or saved_waba_id
+            sb.table("tenant_whatsapp_credentials").update({
+                "phone_number_id": saved_phone_id,
+                "whatsapp_business_account_id": saved_waba_id,
+                "access_token": settings.facebook_page_access_token,
+            }).eq("tenant_id", tenant_id).execute()
 
     # Subscribe WABA to app webhooks so Meta starts routing inbound messages
     if saved_waba_id and access_token:

@@ -111,7 +111,25 @@ def _resolve_tenant_credentials(phone_number_id: str) -> Optional[dict]:
         .limit(1)
         .execute()
     )
-    return result.data[0] if result.data else None
+    if result.data:
+        return result.data[0]
+    # Fallback for Meta pre-approved sandbox/test phone_number_id when tenant's
+    # primary number is still awaiting display name approval (131037).
+    if phone_number_id and phone_number_id == settings.whatsapp_phone_number_id:
+        fallback = (
+            sb.table("tenant_whatsapp_credentials")
+            .select("tenant_id")
+            .eq("status", "active")
+            .limit(1)
+            .execute()
+        )
+        if fallback.data:
+            return {
+                "tenant_id": fallback.data[0]["tenant_id"],
+                "phone_number_id": settings.whatsapp_phone_number_id,
+                "access_token": settings.facebook_page_access_token,
+            }
+    return None
 
 
 def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
