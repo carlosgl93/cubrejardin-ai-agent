@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from api.tenant_context import TenantContext, get_tenant_context
 from channels.instagram import GRAPH_BASE
 from config.settings import get_settings
-from services.facebook_auth import subscribe_page_to_app
+from services.facebook_auth import subscribe_ig_to_app, subscribe_page_to_app
 
 router = APIRouter(prefix="/api/instagram", tags=["instagram"])
 
@@ -31,6 +31,7 @@ class ExchangeInstagramCodeRequest(BaseModel):
     auth_code: str
     redirect_uri: str = ""
     config_id: str = ""
+    provider: str = ""
     # Captured from sessionInfoListener on the FBL popup. When present, the
     # backend skips page/IG discovery (which fails for system-user tokens
     # issued by FBL) and writes the connection directly.
@@ -157,6 +158,89 @@ async def exchange(
     settings = get_settings()
     app_id = settings.facebook_target_app_id
     app_secret = settings.facebook_app_secret
+    ig_app_id = getattr(settings, "instagram_app_id", "1601061118264428")
+    ig_app_secret = getattr(settings, "instagram_app_secret", "")
+
+    # Native Instagram Business Login path (instagram.com/oauth/authorize)
+    if payload.provider == "instagram" and ig_app_secret:
+        clean_code = code.removesuffix("#_").strip()
+        async with httpx.AsyncClient(timeout=15) as client:
+            short_r = await client.post(
+                "https://api.instagram.com/oauth/access_token",
+                data={
+                    "client_id": ig_app_id,
+                    "client_secret": ig_app_secret,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": redirect_uri,
+                    "code": clean_code,
+                },
+            )
+            if short_r.status_code >= 400:
+                raise HTTPException(status_code=502, detail=f"IG token exchange failed: {short_r.text}")
+            short_data = short_r.json()
+            if isinstance(short_data.get("data"), list) and short_data["data"]:
+                short_data = short_data["data"][0]
+            short_ig_token = short_data.get("access_token", "")
+            ig_uid = str(short_data.get("user_id", ""))
+
+            long_r = await client.get(
+                "https://graph.instagram.com/access_token",
+                params={
+                    "grant_type": "ig_exchange_token",
+                    "client_secret": ig_app_secret,
+                    "access_token": short_ig_token,
+                },
+            )
+            if long_r.status_code == 200 and "access_token" in long_r.json():
+                long_ig_data = long_r.json()
+                long_ig_token = long_ig_data["access_token"]
+                expires_in = long_ig_data.get("expires_in", 5184000)
+            else:
+                long_ig_token = short_ig_token
+                expires_in = 3600
+
+            me_r = await client.get(
+                "https://graph.instagram.com/v21.0/me",
+                params={"fields": "id,user_id,username", "access_token": long_ig_token},
+            )
+            if me_r.status_code == 200:
+                me_data = me_r.json()
+                ig_uid = str(me_data.get("user_id") or me_data.get("id") or ig_uid)
+
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        existing_ig = _supabase_fetch_ig_creds(ctx.tenant_id)
+        resolved_page_id = (
+            payload.page_id
+            or (existing_ig.get("page_id") if existing_ig else "")
+            or os.getenv("INSTAGRAM_PAGE_ID", "")
+        )
+        row = {
+            "ig_user_id": ig_uid,
+            "page_id": resolved_page_id,
+            "page_access_token": long_ig_token,
+            "status": "active",
+            "token_expires_at": expires_at.isoformat(),
+            "raw_oauth_response": {"provider": "instagram", "ig_user_id": ig_uid},
+        }
+        if existing_ig and existing_ig.get("status") == "active":
+            _supabase_update_ig_creds(ctx.tenant_id, {
+                "page_access_token": long_ig_token,
+                "token_expires_at": expires_at.isoformat(),
+                "page_id": resolved_page_id,
+                "ig_user_id": ig_uid,
+            })
+        else:
+            _supabase_upsert_ig_creds(ctx.tenant_id, row)
+
+        if ig_uid and long_ig_token:
+            await subscribe_ig_to_app(ig_uid, long_ig_token)
+
+        return ExchangeInstagramCodeResponse(
+            ig_user_id=ig_uid,
+            page_id=resolved_page_id,
+            status="active",
+            token_expires_at=expires_at.isoformat(),
+        )
 
     # 1. Exchange code -> short-lived user token.
     # For standard OAuth (no FBL), FB.login locks redirect_uri to the page
@@ -305,11 +389,52 @@ async def exchange(
         except Exception as e:
             print(f"[ig.exchange] /me/accounts failed: {e}", flush=True)
 
-    # 3e. Env var fallbacks for single-tenant / local development
+    existing = _supabase_fetch_ig_creds(ctx.tenant_id)
+    existing_ig_token = (
+        existing.get("page_access_token", "")
+        if existing and existing.get("status") == "active"
+        else ""
+    )
+
+    # 3e. Preserve existing IGAA token / IDs or fall back to env vars
+    if not ig_user_id and existing and existing.get("ig_user_id"):
+        ig_user_id = str(existing["ig_user_id"])
+    if not page_id and existing and existing.get("page_id"):
+        page_id = str(existing["page_id"])
     if not ig_user_id:
         ig_user_id = os.getenv("INSTAGRAM_IG_USER_ID", "")
     if not page_id:
         page_id = os.getenv("INSTAGRAM_PAGE_ID", "")
+
+    # If /me/accounts didn't return a page_access_token and the tenant already has
+    # an active IGAA... token, keep/refresh the IGAA... token instead of overwriting
+    # it with a Facebook User token that cannot send Instagram DMs.
+    if not page_access_token and existing_ig_token.startswith("IG"):
+        effective_token = existing_ig_token
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                ref_r = await client.get(
+                    "https://graph.instagram.com/refresh_access_token",
+                    params={
+                        "grant_type": "ig_refresh_token",
+                        "access_token": existing_ig_token,
+                    },
+                )
+                if ref_r.status_code == 200 and "access_token" in ref_r.json():
+                    ref_data = ref_r.json()
+                    effective_token = ref_data["access_token"]
+                    expires_in = ref_data.get("expires_in", expires_in)
+                me_r = await client.get(
+                    "https://graph.instagram.com/v21.0/me",
+                    params={"fields": "id,user_id", "access_token": effective_token},
+                )
+                if me_r.status_code == 200:
+                    me_d = me_r.json()
+                    ig_user_id = str(me_d.get("user_id") or me_d.get("id") or ig_user_id)
+        except Exception as e:
+            print(f"[ig.exchange] IGAA token refresh/inspect skipped: {e}", flush=True)
+    else:
+        effective_token = page_access_token or long_token
 
     if not ig_user_id:
         print(
@@ -320,9 +445,6 @@ async def exchange(
             status_code=400,
             detail="No Instagram Professional account linked to your Pages",
         )
-
-    # Fall back to long_token if page_access_token wasn't separately returned
-    effective_token = page_access_token or long_token
 
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     row = {
@@ -341,7 +463,6 @@ async def exchange(
     }
 
     # Upsert Instagram credentials
-    existing = _supabase_fetch_ig_creds(ctx.tenant_id)
     if existing and existing.get("status") == "active":
         _supabase_update_ig_creds(ctx.tenant_id, {
             "page_access_token": effective_token,
@@ -361,16 +482,26 @@ async def exchange(
                 _supabase_upsert_messenger_creds,
             )
             msg_existing = _supabase_fetch_messenger_creds(ctx.tenant_id)
+            existing_msg_token = (
+                msg_existing.get("page_access_token", "")
+                if msg_existing and msg_existing.get("status") == "active"
+                else ""
+            )
+            msg_token = (
+                page_access_token
+                or (existing_msg_token if existing_msg_token.startswith("EAA") else "")
+                or long_token
+            )
             if msg_existing and msg_existing.get("status") == "active":
                 _supabase_update_messenger_creds(ctx.tenant_id, {
-                    "page_access_token": effective_token,
+                    "page_access_token": msg_token,
                     "token_expires_at": expires_at.isoformat(),
                     "page_id": page_id,
                 })
             else:
                 _supabase_upsert_messenger_creds(ctx.tenant_id, {
                     "page_id": page_id,
-                    "page_access_token": effective_token,
+                    "page_access_token": msg_token,
                     "status": "active",
                     "token_expires_at": expires_at.isoformat(),
                     "raw_oauth_response": {
@@ -378,11 +509,15 @@ async def exchange(
                         "page_id": page_id,
                     },
                 })
+            if msg_token.startswith("EAA"):
+                await subscribe_page_to_app(page_id, msg_token)
         except Exception as e:
             print(f"[ig.exchange] messenger creds upsert failed: {e}", flush=True)
 
-    # Subscribe page to webhooks for inbound DMs
-    if page_id and effective_token:
+    # Subscribe IG / Page to webhooks for inbound DMs
+    if effective_token.startswith("IG") and ig_user_id:
+        await subscribe_ig_to_app(ig_user_id, effective_token)
+    elif page_id and effective_token:
         await subscribe_page_to_app(page_id, effective_token)
 
     print(
@@ -396,6 +531,15 @@ async def exchange(
         status="active",
         token_expires_at=expires_at.isoformat(),
     )
+
+
+@router.post("/refresh")
+async def refresh_tokens_endpoint():
+    """Trigger refresh for all Instagram tokens expiring within 7 days."""
+    from jobs.refresh_instagram_tokens import refresh_due_tokens
+
+    refreshed = refresh_due_tokens()
+    return {"status": "ok", "refreshed_count": refreshed}
 
 
 @router.get("/status", response_model=InstagramStatusResponse)

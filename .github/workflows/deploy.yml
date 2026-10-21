@@ -35,6 +35,10 @@ jobs:
             --region us-central1 \
             --env-vars-file /tmp/env.prod.yaml \
             --project sg-cloud-cefee
+          gcloud run services update whatsapp-api \
+            --region us-central1 \
+            --update-env-vars="INSTAGRAM_PAGE_ID=1028203907040559,INSTAGRAM_IG_USER_ID=17841403976567314" \
+            --project sg-cloud-cefee
           rm /tmp/env.prod.yaml
         env:
           ENV_PROD_YAML: ${{ secrets.ENV_PROD_YAML }}

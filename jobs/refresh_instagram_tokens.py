@@ -20,6 +20,18 @@ def _fetch_due_creds() -> list[dict]:
 
 
 def _refresh_token(current_token: str) -> dict:
+    if current_token.startswith("IG"):
+        resp = httpx.get(
+            "https://graph.instagram.com/refresh_access_token",
+            params={
+                "grant_type": "ig_refresh_token",
+                "access_token": current_token,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     from config.settings import get_settings
     settings = get_settings()
     app_id = settings.facebook_target_app_id

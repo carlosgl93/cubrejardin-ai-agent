@@ -129,6 +129,39 @@ async def subscribe_page_to_app(
         return False
 
 
+async def subscribe_ig_to_app(
+    ig_user_id: str, ig_access_token: str, client: Optional[httpx.AsyncClient] = None
+) -> bool:
+    """Subscribe Instagram Business account to receive DM webhooks via graph.instagram.com."""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    url = f"https://graph.instagram.com/v21.0/{ig_user_id}/subscribed_apps"
+    params = {"subscribed_fields": "messages", "access_token": ig_access_token}
+
+    async def _post(c: httpx.AsyncClient) -> bool:
+        resp = await c.post(url, params=params)
+        if resp.status_code == 200 and resp.json().get("success"):
+            logger.info("Successfully subscribed Instagram App to IG user %s", ig_user_id)
+            return True
+        logger.warning(
+            "Failed to subscribe Instagram App to IG user %s: status=%d body=%s",
+            ig_user_id,
+            resp.status_code,
+            resp.text,
+        )
+        return False
+
+    try:
+        if client:
+            return await _post(client)
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            return await _post(c)
+    except Exception as exc:
+        logger.error("Error subscribing Instagram App to IG user %s: %s", ig_user_id, exc)
+        return False
+
+
 async def _exchange_code_for_token(
     auth_code: str, client: httpx.AsyncClient
 ) -> Tuple[str, Optional[int]]:

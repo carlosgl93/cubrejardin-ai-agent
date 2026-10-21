@@ -33,3 +33,6 @@ steps:
 
 images:
   - gcr.io/$PROJECT_ID/whatsapp-api:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY

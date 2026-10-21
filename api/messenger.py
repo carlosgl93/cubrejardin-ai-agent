@@ -196,10 +196,25 @@ async def exchange(
         except Exception:
             pass
 
+    existing = _supabase_fetch_messenger_creds(ctx.tenant_id)
+    if not page_id and existing and existing.get("page_id"):
+        page_id = str(existing["page_id"])
+    if not page_id:
+        page_id = os.getenv("INSTAGRAM_PAGE_ID", "")
+
     if not page_id:
         raise HTTPException(status_code=422, detail="No Facebook Page found")
 
-    effective_token = page_access_token or long_token
+    existing_token = (
+        existing.get("page_access_token", "")
+        if existing and existing.get("status") == "active"
+        else ""
+    )
+    effective_token = (
+        page_access_token
+        or (existing_token if existing_token.startswith("EAA") else "")
+        or long_token
+    )
 
     row = {
         "page_id": page_id,
@@ -214,7 +229,6 @@ async def exchange(
         },
     }
 
-    existing = _supabase_fetch_messenger_creds(ctx.tenant_id)
     if existing and existing.get("status") == "active":
         _supabase_update_messenger_creds(ctx.tenant_id, {
             "page_access_token": effective_token,
