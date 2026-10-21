@@ -106,11 +106,13 @@ class MessengerAdapter(ChannelAdapter):
             page_id = entry.get("id")
             for event in entry.get("messaging", []):
                 msg = event.get("message") or {}
+                if msg.get("is_echo"):
+                    continue
                 text = msg.get("text")
                 if not text:
                     continue
                 sender = event.get("sender", {}).get("id")
-                if not sender:
+                if not sender or sender == page_id:
                     continue
                 out.append(InboundMessage(
                     channel="messenger",
