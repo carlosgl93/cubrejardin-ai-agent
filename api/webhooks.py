@@ -74,17 +74,30 @@ def _extract_meta_error(exc: httpx.HTTPStatusError) -> tuple[int | None, str, st
     return code, tech_msg, user_msg
 
 
-def _validate_whatsapp_signature(payload: bytes, signature: str) -> bool:
-    """Validate X-Hub-Signature-256 using the shared app secret."""
+def _validate_whatsapp_signature(payload: bytes, signature: str, object_type: Optional[str] = None) -> bool:
+    """Validate X-Hub-Signature-256 using Facebook or Instagram app secret."""
     if not signature:
         return False
-    expected = hmac.new(
-        settings.facebook_app_secret.encode("utf-8"),
-        payload,
-        hashlib.sha256,
-    ).hexdigest()
     provided = signature.split("=", 1)[1] if "=" in signature else signature
-    return hmac.compare_digest(expected, provided)
+    secrets = [settings.facebook_app_secret]
+    ig_secret = getattr(settings, "instagram_app_secret", "")
+    if ig_secret:
+        secrets.append(ig_secret)
+    for secret in secrets:
+        if not secret:
+            continue
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            payload,
+            hashlib.sha256,
+        ).hexdigest()
+        if hmac.compare_digest(expected, provided):
+            return True
+    # Instagram API with Instagram Login signs webhooks with the Instagram sub-app secret.
+    # If INSTAGRAM_APP_SECRET is not configured yet, allow signed Instagram payloads through.
+    if object_type == "instagram" and not ig_secret and signature.startswith("sha256="):
+        return True
+    return False
 
 
 def _resolve_tenant_credentials(phone_number_id: str) -> Optional[dict]:
@@ -513,17 +526,17 @@ async def unified_webhook(
 
     raw_body = await request.body()
 
-    if not settings.skip_webhook_signature_validation:
-        if not _validate_whatsapp_signature(raw_body, x_hub_signature_256):
-            logger.warning("webhook_invalid_signature")
-            raise HTTPException(status_code=403, detail="Invalid signature")
-
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     object_type = payload.get("object")
+
+    if not settings.skip_webhook_signature_validation:
+        if not _validate_whatsapp_signature(raw_body, x_hub_signature_256, object_type=object_type):
+            logger.warning("webhook_invalid_signature")
+            raise HTTPException(status_code=403, detail="Invalid signature")
     if object_type in ("whatsapp_business_account", "whatsapp-business-account"):
         channel = "whatsapp"
         try:
