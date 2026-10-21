@@ -146,8 +146,31 @@ async def exchange(
     expires_in = long_resp.get("expires_in", 5184000)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
-    page_id = payload.page_id
+    page_id = payload.page_id.strip() if payload.page_id else ""
     page_access_token = ""
+
+    # Inspect token via /debug_token if page_id not provided
+    if not page_id:
+        app_token = f"{app_id}|{app_secret}"
+        try:
+            debug_resp = await _graph_get(
+                "/debug_token",
+                {"input_token": long_token, "access_token": app_token},
+            )
+            granular_scopes = debug_resp.get("data", {}).get("granular_scopes", [])
+            for item in granular_scopes:
+                if item.get("scope") in (
+                    "pages_messaging",
+                    "pages_show_list",
+                    "pages_read_engagement",
+                    "pages_manage_metadata",
+                ):
+                    targets = item.get("target_ids", [])
+                    if targets:
+                        page_id = str(targets[0])
+                        break
+        except Exception:
+            pass
 
     if page_id:
         try:

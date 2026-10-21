@@ -205,163 +205,107 @@ async def exchange(
     long_token = long_resp["access_token"]
     expires_in = long_resp.get("expires_in", 5184000)
 
-    # 3a. Fast-path: FBL popup captured page_id + ig_user_id via
-    # sessionInfoListener. Write directly. Bypasses the token-based discovery
-    # (which fails because FBL binds the code to the app's auto-created
-    # system user, which has no Page/IG assignments even after we assign
-    # assets to other system users via Business Manager).
-    if payload.page_id and payload.ig_user_id:
-        settings = get_settings()
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    # 3. Resolve page_id and ig_user_id
+    page_id = payload.page_id.strip() if payload.page_id else ""
+    ig_user_id = payload.ig_user_id.strip() if payload.ig_user_id else ""
 
-        # Try to resolve a page-scoped access token using long_token
-        page_access_token = ""
+    # 3a. Inspect token via /debug_token to read granular_scopes
+    app_token = f"{app_id}|{app_secret}"
+    debug_data: dict[str, Any] = {}
+    try:
+        debug_resp = await _graph_get(
+            "/debug_token",
+            {"input_token": long_token, "access_token": app_token},
+        )
+        debug_data = debug_resp.get("data", {})
+        granular_scopes = debug_data.get("granular_scopes", [])
+        print(f"[ig.exchange] debug_token granular_scopes: {granular_scopes}", flush=True)
+
+        for item in granular_scopes:
+            scope = item.get("scope", "")
+            target_ids = item.get("target_ids", [])
+            if not target_ids:
+                continue
+            if not ig_user_id and scope in (
+                "instagram_manage_engagement",
+                "instagram_manage_messages",
+                "instagram_basic",
+            ):
+                ig_user_id = str(target_ids[0])
+            elif not page_id and scope in (
+                "pages_messaging",
+                "pages_show_list",
+                "pages_read_engagement",
+                "pages_manage_metadata",
+            ):
+                page_id = str(target_ids[0])
+    except Exception as e:
+        print(f"[ig.exchange] debug_token inspect failed: {e}", flush=True)
+
+    # 3b. If page_id is known, query it with long_token to get page_access_token & linked IG account
+    page_access_token = ""
+    if page_id:
         try:
             page_query = await _graph_get(
-                f"/{payload.page_id}",
-                {"fields": "access_token", "access_token": long_token},
+                f"/{page_id}",
+                {"fields": "access_token,instagram_business_account", "access_token": long_token},
             )
             page_access_token = page_query.get("access_token", "")
-        except Exception:
-            pass
+            if not ig_user_id and page_query.get("instagram_business_account"):
+                ig_user_id = str(page_query["instagram_business_account"].get("id", ""))
+        except Exception as e:
+            print(f"[ig.exchange] direct page query with long_token failed: {e}", flush=True)
 
-        # Fall back to settings.facebook_page_access_token if user token doesn't manage page
-        if not page_access_token:
-            page_access_token = settings.facebook_page_access_token
-
-        row = {
-            "ig_user_id": payload.ig_user_id,
-            "page_id": payload.page_id,
-            "page_access_token": page_access_token,
-            "status": "active",
-            "token_expires_at": expires_at.isoformat(),
-            "raw_oauth_response": {
-                "short_token_resp": _scrub_tokens(token_resp),
-                "long_token_resp": _scrub_tokens(long_resp),
-                "fbl_popup": True,
-                "page_id": payload.page_id,
-                "ig_user_id": payload.ig_user_id,
-            },
-        }
-        existing = _supabase_fetch_ig_creds(ctx.tenant_id)
-        if existing and existing.get("status") == "active":
-            _supabase_update_ig_creds(ctx.tenant_id, {
-                "page_access_token": page_access_token,
-                "token_expires_at": expires_at.isoformat(),
-                "page_id": payload.page_id,
-                "ig_user_id": payload.ig_user_id,
-            })
-        else:
-            _supabase_upsert_ig_creds(ctx.tenant_id, row)
-
-        # Subscribe page to webhooks for inbound DMs
-        if page_access_token:
-            await subscribe_page_to_app(payload.page_id, page_access_token)
-
-        print(
-            f"[ig.exchange] fbl_fast_path tenant={ctx.tenant_id} "
-            f"page_id={payload.page_id} ig_user_id={payload.ig_user_id}",
-            flush=True,
-        )
-        return ExchangeInstagramCodeResponse(
-            ig_user_id=payload.ig_user_id,
-            page_id=payload.page_id,
-            status="active",
-            token_expires_at=expires_at.isoformat(),
-        )
-
-    # 3b. Resolve the IG-linked Page.
-    # /me/accounts requires pages_show_list which isn't granted by IG signup
-    # scopes. Strategy: use the user's IG-scoped token to find the IG business
-    # account, then read its linked page.
-    ig_user_id_env = os.getenv("INSTAGRAM_IG_USER_ID", "")
-    if ig_user_id_env:
-        # Single-tenant: query the IG user directly with the user's long_token.
-        # The IG user object exposes `page` (the linked FB Page) in newer Graph
-        # API versions, or we can read the user's IG identity via /{ig_user_id}.
+    # 3c. If ig_user_id is known but not page_id, query IG user for linked page
+    if ig_user_id and not page_id:
         try:
-            ig_resp = await _graph_get(f"/{ig_user_id_env}", {
-                "fields": "id,username,name,page{id,name}",
-                "access_token": long_token,
-            })
-            print(
-                f"[ig.exchange] /{ig_user_id_env} resolved={ig_resp}",
-                flush=True,
+            ig_resp = await _graph_get(
+                f"/{ig_user_id}",
+                {"fields": "id,username,name,page{id,name}", "access_token": long_token},
             )
             page_obj = ig_resp.get("page")
             if page_obj:
-                page_id = page_obj["id"]
-                pages = [{"id": page_id, "access_token": long_token}]
-                print(
-                    f"[ig.exchange] IG user {ig_user_id_env} linked to page {page_id}",
-                    flush=True,
-                )
-            else:
-                pages = []
-        except httpx.HTTPError as e:
-            print(f"[ig.exchange] ig_user_query_failed: {e}", flush=True)
-            pages = []
-    else:
-        pages = []
+                page_id = str(page_obj["id"])
+                try:
+                    pq = await _graph_get(
+                        f"/{page_id}",
+                        {"fields": "access_token", "access_token": long_token},
+                    )
+                    page_access_token = pq.get("access_token", "")
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[ig.exchange] ig_user query failed: {e}", flush=True)
 
-    if not pages:
-        # Fallback: try /me/accounts with the user token.
-        me_resp = await _graph_get("/me/accounts", {"access_token": long_token})
-        pages = me_resp.get("data") or []
-        print(
-            f"[ig.exchange] /me/accounts user_count={len(pages)} tenant={ctx.tenant_id}",
-            flush=True,
-        )
-        if not pages:
-            # Long-lived token from this FBL config is a system-user token
-            # (config's type=System-user access token) and can't query
-            # user-scoped data like /{INSTAGRAM_IG_USER_ID}. Fall back to
-            # FACEBOOK_PAGE_ACCESS_TOKEN (sgcloudadmin system user) which
-            # owns Page INSTAGRAM_PAGE_ID and can read its IG link. Single-
-            # tenant path; multi-tenant needs per-tenant page tokens.
-            page_id_env = os.getenv("INSTAGRAM_PAGE_ID", "")
-            page_token = settings.facebook_page_access_token
-            if page_id_env and page_token:
-                print(
-                    f"[ig.exchange] using FACEBOOK_PAGE_ACCESS_TOKEN to probe "
-                    f"page {page_id_env} for IG link",
-                    flush=True,
-                )
-                pages = [{"id": page_id_env, "access_token": page_token}]
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "No IG-linked Page found. Set INSTAGRAM_IG_USER_ID env "
-                        "var with the IG business account id to bypass."
-                    ),
-                )
-
-    # 4. Find a Page with a linked Instagram Professional account
-    ig_user_id: Optional[str] = None
-    page_id: Optional[str] = None
-    page_access_token: Optional[str] = None
-    for p in pages:
+    # 3d. Fallback: try /me/accounts with user long_token
+    if not page_id or not ig_user_id:
         try:
-            r = await _graph_get(
-                f"/{p['id']}",
-                {
-                    "fields": "instagram_business_account",
-                    "access_token": p.get("access_token") or settings.facebook_page_access_token,
-                },
+            me_resp = await _graph_get(
+                "/me/accounts",
+                {"access_token": long_token, "fields": "id,name,access_token,instagram_business_account"},
             )
-        except httpx.HTTPError:
-            continue
-        igba = r.get("instagram_business_account")
-        if igba:
-            ig_user_id = igba["id"]
-            page_id = p["id"]
-            page_access_token = p.get("access_token") or settings.facebook_page_access_token
-            break
+            for p in me_resp.get("data", []):
+                if not page_id:
+                    page_id = str(p["id"])
+                    page_access_token = p.get("access_token", "")
+                igba = p.get("instagram_business_account")
+                if igba and not ig_user_id:
+                    ig_user_id = str(igba["id"])
+                    page_id = str(p["id"])
+                    page_access_token = p.get("access_token", "")
+                    break
+        except Exception as e:
+            print(f"[ig.exchange] /me/accounts failed: {e}", flush=True)
+
+    # 3e. Env var fallbacks for single-tenant / local development
+    if not ig_user_id:
+        ig_user_id = os.getenv("INSTAGRAM_IG_USER_ID", "")
+    if not page_id:
+        page_id = os.getenv("INSTAGRAM_PAGE_ID", "")
 
     if not ig_user_id:
         print(
-            f"[ig.exchange] no_ig tenant={ctx.tenant_id} page_ids={[p.get('id') for p in pages]}",
+            f"[ig.exchange] failed to resolve ig_user_id tenant={ctx.tenant_id} page_id={page_id} debug_data={debug_data}",
             flush=True,
         )
         raise HTTPException(
@@ -369,34 +313,74 @@ async def exchange(
             detail="No Instagram Professional account linked to your Pages",
         )
 
+    # Fall back to long_token if page_access_token wasn't separately returned
+    effective_token = page_access_token or long_token
+
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     row = {
         "ig_user_id": ig_user_id,
         "page_id": page_id,
-        "page_access_token": page_access_token,
+        "page_access_token": effective_token,
         "status": "active",
         "token_expires_at": expires_at.isoformat(),
         "raw_oauth_response": {
             "short_token_resp": _scrub_tokens(token_resp),
             "long_token_resp": _scrub_tokens(long_resp),
+            "debug_token": debug_data,
             "page_id": page_id,
+            "ig_user_id": ig_user_id,
         },
     }
 
-    # Idempotency: if active row exists, narrow update preserves operator edits.
+    # Upsert Instagram credentials
     existing = _supabase_fetch_ig_creds(ctx.tenant_id)
     if existing and existing.get("status") == "active":
         _supabase_update_ig_creds(ctx.tenant_id, {
-            "page_access_token": page_access_token,
+            "page_access_token": effective_token,
             "token_expires_at": expires_at.isoformat(),
             "page_id": page_id,
+            "ig_user_id": ig_user_id,
         })
     else:
         _supabase_upsert_ig_creds(ctx.tenant_id, row)
 
+    # Also upsert Facebook Messenger credentials if page_id is known
+    if page_id:
+        try:
+            from api.messenger import (
+                _supabase_fetch_messenger_creds,
+                _supabase_update_messenger_creds,
+                _supabase_upsert_messenger_creds,
+            )
+            msg_existing = _supabase_fetch_messenger_creds(ctx.tenant_id)
+            if msg_existing and msg_existing.get("status") == "active":
+                _supabase_update_messenger_creds(ctx.tenant_id, {
+                    "page_access_token": effective_token,
+                    "token_expires_at": expires_at.isoformat(),
+                    "page_id": page_id,
+                })
+            else:
+                _supabase_upsert_messenger_creds(ctx.tenant_id, {
+                    "page_id": page_id,
+                    "page_access_token": effective_token,
+                    "status": "active",
+                    "token_expires_at": expires_at.isoformat(),
+                    "raw_oauth_response": {
+                        "source": "api.instagram.exchange",
+                        "page_id": page_id,
+                    },
+                })
+        except Exception as e:
+            print(f"[ig.exchange] messenger creds upsert failed: {e}", flush=True)
+
     # Subscribe page to webhooks for inbound DMs
-    if page_access_token:
-        await subscribe_page_to_app(page_id, page_access_token)
+    if page_id and effective_token:
+        await subscribe_page_to_app(page_id, effective_token)
+
+    print(
+        f"[ig.exchange] success tenant={ctx.tenant_id} page_id={page_id} ig_user_id={ig_user_id}",
+        flush=True,
+    )
 
     return ExchangeInstagramCodeResponse(
         ig_user_id=ig_user_id,

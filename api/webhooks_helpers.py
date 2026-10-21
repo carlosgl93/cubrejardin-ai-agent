@@ -45,24 +45,39 @@ def resolve_tenant_for_whatsapp(payload: dict) -> str:
 def resolve_tenant_for_instagram(payload: dict) -> str:
     """Resolve tenant_id from an Instagram webhook payload.
 
-    Looks up the ``page_id`` (from ``entry[0].id``) against active rows of
-    ``tenant_instagram_credentials``.
+    Looks up the ID (from ``entry[0].id``) against active rows of
+    ``tenant_instagram_credentials``, checking both ``ig_user_id`` and ``page_id``.
     """
 
-    page_id = payload["entry"][0]["id"]
+    entry_id = str(payload["entry"][0]["id"])
     supabase = get_supabase_client()
+    # Check ig_user_id first
     res = (
         supabase.table("tenant_instagram_credentials")
         .select("tenant_id")
-        .eq("page_id", page_id)
+        .eq("ig_user_id", entry_id)
         .eq("status", "active")
         .limit(1)
         .maybe_single()
         .execute()
     )
-    if not res.data:
-        raise ValueError(f"No tenant for IG page {page_id}")
-    return res.data["tenant_id"]
+    if res and res.data:
+        return res.data["tenant_id"]
+
+    # Fall back to page_id
+    res_page = (
+        supabase.table("tenant_instagram_credentials")
+        .select("tenant_id")
+        .eq("page_id", entry_id)
+        .eq("status", "active")
+        .limit(1)
+        .maybe_single()
+        .execute()
+    )
+    if res_page and res_page.data:
+        return res_page.data["tenant_id"]
+
+    raise ValueError(f"No tenant for IG account/page {entry_id}")
 
 
 def resolve_tenant_for_messenger(payload: dict) -> str:

@@ -19,17 +19,32 @@ def test_exchange_endpoint_persists_credentials():
         tenant_name="Test Tenant",
     )
 
-    # The endpoint calls _graph_get multiple times during the IG flow:
+    # The endpoint calls _graph_get during the IG flow:
     #  1. code -> short-lived user token
     #  2. short -> long-lived user token (with expires_in)
-    #  3. /me/accounts to list pages
-    #  4. /{page_id}?fields=instagram_business_account
-    # Return the correct shape per call.
+    #  3. /debug_token to inspect granular_scopes
+    #  4. /{page_id}?fields=access_token,instagram_business_account
     graph_responses = [
         {"access_token": "SHORT_LIVED_TOKEN"},
         {"access_token": "PAGE_TOKEN_LONG", "expires_in": 5184000},
-        {"data": [{"id": "1234567890", "access_token": "PAGE_ACCESS_TOKEN"}]},
-        {"instagram_business_account": {"id": "17841401234567890"}},
+        {
+            "data": {
+                "granular_scopes": [
+                    {
+                        "scope": "instagram_manage_engagement",
+                        "target_ids": ["17841401234567890"],
+                    },
+                    {
+                        "scope": "pages_messaging",
+                        "target_ids": ["1234567890"],
+                    },
+                ]
+            }
+        },
+        {
+            "access_token": "PAGE_ACCESS_TOKEN",
+            "instagram_business_account": {"id": "17841401234567890"},
+        },
     ]
 
     def override_get_tenant_context():
