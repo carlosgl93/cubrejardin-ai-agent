@@ -37,3 +37,50 @@ def root() -> dict:
     """Return service metadata."""
 
     return {"name": settings.app_name, "environment": settings.environment}
+
+
+@app.get("/health")
+async def health() -> dict:
+    """Return service health status and component checks."""
+    checks = {}
+    is_healthy = True
+
+    # Supabase connectivity check
+    if settings.supabase_url and settings.supabase_service_role_key:
+        try:
+            from config.supabase import get_supabase_client
+
+            sb = get_supabase_client()
+            sb.table("tenants").select("id").limit(1).execute()
+            checks["supabase"] = "ok"
+        except Exception as exc:
+            checks["supabase"] = f"degraded: {exc}"
+            is_healthy = False
+    else:
+        checks["supabase"] = "unconfigured"
+
+    # Redis connectivity check
+    if settings.redis_url:
+        try:
+            import redis.asyncio as aioredis
+
+            r = aioredis.from_url(
+                settings.redis_url,
+                socket_timeout=0.5,
+                socket_connect_timeout=0.5,
+            )
+            await r.ping()
+            await r.aclose()
+            checks["redis"] = "ok"
+        except Exception:
+            checks["redis"] = "fallback_memory"
+    else:
+        checks["redis"] = "memory"
+
+    return {
+        "status": "ok" if is_healthy else "degraded",
+        "app": settings.app_name,
+        "environment": settings.environment,
+        "checks": checks,
+    }
+
