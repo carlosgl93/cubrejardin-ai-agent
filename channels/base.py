@@ -1,14 +1,26 @@
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, runtime_checkable
 
 
 @dataclass
 class InboundMessage:
-    channel: str           # 'whatsapp' | 'instagram'
-    external_user_id: str  # phone number or IGSID
+    channel: str           # 'whatsapp' | 'instagram' | 'messenger'
+    external_user_id: str  # phone number or IGSID/PSID
     text: str
     raw: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
+    message_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.message_id:
+            self.message_id = (
+                self.metadata.get("ig_mid")
+                or self.metadata.get("wamid")
+                or self.metadata.get("mid")
+                or self.raw.get("id")
+                or self.raw.get("mid")
+            )
+
 
 
 @runtime_checkable

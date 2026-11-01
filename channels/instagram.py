@@ -113,5 +113,6 @@ class InstagramAdapter(ChannelAdapter):
                         "page_id": page_id,
                         "ig_mid": msg.get("mid"),
                     },
+                    message_id=msg.get("mid"),
                 ))
         return out

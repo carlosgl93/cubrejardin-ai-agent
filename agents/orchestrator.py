@@ -51,9 +51,14 @@ class AgentOrchestrator:
         self._bot_config: TenantBotConfig = (
             get_tenant_bot_config(tenant_id) if tenant_id else TenantBotConfig()
         )
-        self.guardian = GuardianAgent(openai_service, handoff_trigger=self._bot_config.handoff_trigger)
-        self.rag = RAGAgent(openai_service, self.vector_store, system_prompt=self._bot_config.system_prompt)
         tenant_display_name = getattr(self._bot_config, "tenant_name", None) or "el negocio"
+        self.guardian = GuardianAgent(openai_service, handoff_trigger=self._bot_config.handoff_trigger)
+        self.rag = RAGAgent(
+            openai_service,
+            self.vector_store,
+            system_prompt=self._bot_config.system_prompt,
+            business_name=tenant_display_name,
+        )
         self.faq = FAQAgent(openai_service, business_name=tenant_display_name)
         self.handoff = HandoffAgent(
             openai_service=openai_service,
@@ -191,7 +196,8 @@ class AgentOrchestrator:
                 self.faq.generate_faq_response,
                 cleaned,
                 faq_intent,
-                context_text
+                context_text,
+                self._bot_config.system_prompt,
             )
             
             # Use FAQ confidence (which is higher)
@@ -286,10 +292,21 @@ class AgentOrchestrator:
 
     async def has_processed_message(self, message_id: str) -> bool:
         """Return True if the inbound message id has already been processed."""
+        if not message_id:
+            return False
 
-        entries = self.session.query(Conversation)
-        for entry in entries:
-            if entry.role == "user" and entry.message_id == message_id:
-                if not self.tenant_id or entry.tenant_id == self.tenant_id:
-                    return True
-        return False
+        try:
+            from services.deduplication_service import get_deduplication_service
+            dedup = get_deduplication_service()
+            if await dedup.is_processed(message_id, tenant_id=self.tenant_id):
+                return True
+        except Exception:
+            pass
+
+        query = self.session.query(Conversation).filter(
+            Conversation.message_id == message_id,
+            Conversation.role == "user",
+        )
+        if self.tenant_id:
+            query = query.filter(Conversation.tenant_id == self.tenant_id)
+        return query.first() is not None

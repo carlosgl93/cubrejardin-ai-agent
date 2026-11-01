@@ -173,6 +173,7 @@ class WhatsAppAdapter(ChannelAdapter):
                                 "waba_id": metadata.get("waba_id"),
                                 "wamid": msg.get("id"),
                             },
+                            message_id=msg.get("id"),
                         )
                     )
         return out

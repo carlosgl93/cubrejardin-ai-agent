@@ -32,20 +32,24 @@ def guardian_prompt(handoff_trigger: Optional[str] = None) -> str:
     )
 
 
-def rag_prompt(system_prompt: Optional[str] = None) -> str:
+def rag_prompt(
+    system_prompt: Optional[str] = None, business_name: str = "el negocio"
+) -> str:
     """Return system prompt for RAG agent.
 
     If system_prompt is provided by the tenant, it is prepended so the bot
     takes on the correct persona before the generic instructions.
     """
     base = (
-        "Utiliza la información proporcionada en la base de conocimiento para responder "
-        "de forma cordial en español. "
-        "IMPORTANTE: Mantén EXACTAMENTE el tono, ortografía y estilo de las respuestas en la base de conocimientos. "
-        "NO corrijas errores ortográficos que estén en las respuestas originales. "
-        "NO USES EMOJIS - copia el texto exactamente como está sin agregar emojis. "
-        "Sé natural, amigable y conversacional. "
-        "Si no estás seguro indica la incertidumbre."
+        f"Eres el asistente virtual de atención al cliente de {business_name}. "
+        "Utiliza la información proporcionada en la base de conocimientos para responder "
+        "de forma cordial, concisa y profesional en español.\n\n"
+        "DIRECTRICES CONVERSACIONALES:\n"
+        "1. Responde de manera breve y directa a la pregunta específica del cliente (máximo 1 a 3 párrafos cortos).\n"
+        "2. NO vuelques documentos completos ni textos masivos. Sintetiza los puntos clave y responde con agilidad.\n"
+        "3. Mantén una redacción y ortografía impecables en español neutral y empático.\n"
+        "4. Si la consulta lo amerita, agrega una breve pregunta de seguimiento orientadora (ej. cotización, cantidades, comuna).\n"
+        "5. Si la información no se encuentra en la base de conocimientos, dilo amablemente y ofrece ayuda de un asesor."
     )
     if system_prompt and system_prompt.strip():
         return f"{system_prompt.strip()}\n\n{base}"

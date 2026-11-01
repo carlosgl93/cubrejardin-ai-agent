@@ -124,18 +124,22 @@ def persist_conversation_message(
     role: str,
     message: str,
     metadata: Optional[dict] = None,
+    message_id: Optional[str] = None,
 ) -> None:
     """Insert a single conversation row tagged by channel."""
 
     supabase = get_supabase_client()
-    supabase.table("conversations").insert({
+    row = {
         "tenant_id": tenant_id,
         "channel": channel,
         "channel_user_id": channel_user_id,
         "role": role,
         "message": message,
         "metadata": metadata or {},
-    }).execute()
+    }
+    if message_id:
+        row["message_id"] = message_id
+    supabase.table("conversations").insert(row).execute()
 
 
 async def run_bot_pipeline(
@@ -144,6 +148,7 @@ async def run_bot_pipeline(
     channel: str,
     channel_user_id: str,
     user_message: str,
+    message_id: Optional[str] = None,
 ) -> None:
     """Run the inbound agent flow and route the outbound reply via the channel adapter.
 
@@ -176,7 +181,7 @@ async def run_bot_pipeline(
     )
     try:
         agent_response = await orchestrator.process_message(
-            channel_user_id, user_message
+            channel_user_id, user_message, message_id=message_id
         )
         text = getattr(agent_response, "message", None)
         if text:
@@ -192,6 +197,7 @@ async def run_bot_pipeline(
                 channel_user_id=channel_user_id,
                 role="assistant",
                 message=text,
+                message_id=f"reply_to_{message_id}" if message_id else None,
             )
     except Exception as exc:
         logger.error(

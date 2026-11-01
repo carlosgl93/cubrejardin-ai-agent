@@ -26,6 +26,7 @@ from channels.registry import get_adapter
 from config import get_settings
 from config.supabase import get_supabase_client
 from models.database import SessionLocal
+from services.deduplication_service import get_deduplication_service
 from services.facebook_messenger_service import FacebookMessengerService
 from services.openai_service import OpenAIService
 from services.telegram_service import TelegramService
@@ -338,6 +339,13 @@ async def whatsapp_webhook(
                         })
                         continue
 
+                    dedup = get_deduplication_service()
+                    if msg.id and not await dedup.claim_message(msg.id, tenant_id=tenant_id):
+                        logger.info(
+                            "whatsapp_duplicate_message_ignored",
+                            extra={"tenant_id": tenant_id, "message_id": msg.id},
+                        )
+                        continue
                     if await orchestrator.has_processed_message(msg.id):
                         continue
 
@@ -401,6 +409,8 @@ async def whatsapp_webhook(
                     )
                     try:
                         await wa_service.send_text_message(user_number, agent_response.message)
+                        if msg.id:
+                            await dedup.mark_done(msg.id, tenant_id=tenant_id)
                         delivery_results.append(
                             {"tenant_id": tenant_id, "user": user_number, "message_id": msg.id, "status": "delivered"}
                         )
@@ -581,8 +591,26 @@ async def unified_webhook(
 
     adapter = get_adapter(channel)
     messages = adapter.parse_webhook(payload)
+    dedup = get_deduplication_service()
 
+    delivery_results: list[dict] = []
     for msg in messages:
+        mid = msg.message_id
+        if mid:
+            claimed = await dedup.claim_message(mid, tenant_id=tenant_id)
+            if not claimed:
+                logger.info(
+                    "webhook_duplicate_message_ignored",
+                    extra={"tenant_id": tenant_id, "channel": channel, "message_id": mid},
+                )
+                delivery_results.append({
+                    "tenant_id": tenant_id,
+                    "channel": channel,
+                    "message_id": mid,
+                    "status": "ignored_duplicate",
+                })
+                continue
+
         try:
             _persist_conversation_message(
                 tenant_id=tenant_id,
@@ -591,13 +619,23 @@ async def unified_webhook(
                 role="user",
                 message=msg.text,
                 metadata=msg.metadata,
+                message_id=mid,
             )
             await _run_bot_pipeline(
                 tenant_id=tenant_id,
                 channel=channel,
                 channel_user_id=msg.external_user_id,
                 user_message=msg.text,
+                message_id=mid,
             )
+            if mid:
+                await dedup.mark_done(mid, tenant_id=tenant_id)
+            delivery_results.append({
+                "tenant_id": tenant_id,
+                "channel": channel,
+                "message_id": mid,
+                "status": "delivered",
+            })
         except Exception as exc:
             logger.error(
                 "webhook_message_processing_failed: tenant=%s channel=%s user=%s error=%s",
@@ -607,8 +645,15 @@ async def unified_webhook(
                 exc,
                 exc_info=True,
             )
+            delivery_results.append({
+                "tenant_id": tenant_id,
+                "channel": channel,
+                "message_id": mid,
+                "status": "failed",
+                "error": str(exc),
+            })
 
-    return {"status": "ok", "count": len(messages), "channel": channel}
+    return {"status": "ok", "count": len(messages), "channel": channel, "results": delivery_results}
 
 
 # ============================================================================
@@ -705,7 +750,14 @@ async def facebook_messenger_webhook(
             message_text = messaging_event.message.text
             message_id = messaging_event.message.mid
             
-            # Check if already processed
+            # Check if already processed (deduplication)
+            dedup = get_deduplication_service()
+            if message_id and not await dedup.claim_message(message_id):
+                logger.info(
+                    "facebook_duplicate_message_ignored",
+                    extra={"message_id": message_id},
+                )
+                continue
             if await orchestrator.has_processed_message(message_id):
                 continue
             
@@ -745,6 +797,8 @@ async def facebook_messenger_webhook(
             # Send response
             try:
                 await messenger_service.send_text_message(sender_id, agent_response.message)
+                if message_id:
+                    await dedup.mark_done(message_id)
                 delivery_results.append({
                     "user": sender_id,
                     "message_id": message_id,

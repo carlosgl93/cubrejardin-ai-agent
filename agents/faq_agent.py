@@ -97,25 +97,25 @@ Responde SOLO con JSON:
         self, 
         message: str, 
         intent: Dict[str, Any],
-        rag_context: str = ""
+        rag_context: str = "",
+        tenant_system_prompt: str | None = None,
     ) -> str:
         """Generate a response based on FAQ intent and RAG context."""
         
         system_prompt = f"""Eres un asistente de atención al cliente de {self.business_name}.
 
-Tu trabajo es responder preguntas usando la información de la base de conocimientos proporcionada.
+Tu labor es responder las preguntas de los clientes de manera concisa, clara, cordial y profesional en español.
 
-REGLAS IMPORTANTES:
-1. Mantén EXACTAMENTE el tono, ortografía y estilo de las respuestas en la base de conocimientos
-2. NO corrijas errores ortográficos que estén en las respuestas originales (ejemplo: "distintsas", "tambine", "tines")
-3. Mantén el uso de mayúsculas y minúsculas exactamente como están
-4. NO USES EMOJIS - Las respuestas originales NO tienen emojis, no los agregues
-5. Si la pregunta requiere información específica del usuario (metros cuadrados, comuna), haz la pregunta correspondiente
-6. Si haces cálculos para metros cuadrados, usa el formato y estilo de las respuestas originales
-7. Sé natural, amigable y conversacional como en los ejemplos
-8. Copia el texto EXACTAMENTE como aparece en la base de conocimientos, sin agregar ni quitar nada
+DIRECTRICES CONVERSACIONALES:
+1. Responde de forma breve y directa a lo que el cliente pregunta (máximo 1 a 3 párrafos cortos).
+2. Sintetiza la información relevante de la base de conocimientos; NO vuelques textos largos ni bloques enteros de documentos.
+3. Utiliza redacción y ortografía correctas en español amigable y cercano.
+4. Si la base de conocimientos contiene detalles extensos, prioriza lo más útil para la consulta actual.
+5. Si corresponde, incluye una pregunta de seguimiento orientadora (por ejemplo: si necesita cotizar metros cuadrados, despacho a su comuna o más información).
+6. Si la información no se encuentra en la base de conocimientos, dilo amablemente y ofrece ayuda general o transferir con un ejecutivo."""
 
-Si la información no está en la base de conocimientos, indica amablemente que no tienes esa información y ofrece ayuda general."""
+        if tenant_system_prompt and tenant_system_prompt.strip():
+            system_prompt = f"{tenant_system_prompt.strip()}\n\n{system_prompt}"
 
         user_content = f"""Pregunta del cliente: {message}
 
@@ -124,7 +124,7 @@ Información de la base de conocimientos:
 
 Información extraída: {json.dumps(intent.get('extracted_info', {}), ensure_ascii=False)}
 
-Responde la pregunta del cliente usando la información proporcionada, manteniendo el tono y estilo exacto de las respuestas."""
+Responde la pregunta del cliente de forma concisa y conversacional usando la información anterior."""
 
         messages = [
             {"role": "system", "content": system_prompt},

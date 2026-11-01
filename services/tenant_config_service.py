@@ -17,6 +17,7 @@ class TenantBotConfig:
     system_prompt: Optional[str] = None
     greeting: Optional[str] = None
     handoff_trigger: Optional[str] = None
+    tenant_name: str = "el negocio"
 
 
 @dataclass
@@ -44,15 +45,31 @@ def get_tenant_bot_config(tenant_id: str) -> TenantBotConfig:
             .limit(1)
             .execute()
         )
+        tenant_name = "el negocio"
+        try:
+            t_res = (
+                sb.table("tenants")
+                .select("name")
+                .eq("id", tenant_id)
+                .limit(1)
+                .maybe_single()
+                .execute()
+            )
+            if t_res and t_res.data and t_res.data.get("name"):
+                tenant_name = t_res.data["name"]
+        except Exception:
+            pass
+
         if result.data:
             row = result.data[0]
             config = TenantBotConfig(
                 system_prompt=row.get("system_prompt") or None,
                 greeting=row.get("greeting") or None,
                 handoff_trigger=row.get("handoff_trigger") or None,
+                tenant_name=tenant_name,
             )
         else:
-            config = TenantBotConfig()
+            config = TenantBotConfig(tenant_name=tenant_name)
     except Exception as exc:
         logger.warning("tenant_config_load_failed", extra={"tenant_id": tenant_id, "error": str(exc)})
         config = TenantBotConfig()

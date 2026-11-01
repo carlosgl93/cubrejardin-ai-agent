@@ -123,5 +123,6 @@ class MessengerAdapter(ChannelAdapter):
                         "page_id": page_id,
                         "mid": msg.get("mid"),
                     },
+                    message_id=msg.get("mid"),
                 ))
         return out
