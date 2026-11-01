@@ -32,6 +32,14 @@ class TestFAQAgent:
         assert intent["category"] == "LOCATION"
         assert intent["confidence"] > 0.5
 
+    def test_identify_faq_intent_prompt_formatting(self, faq_agent, mock_openai_service):
+        """Verify prompt formatting does not raise ValueError on unescaped JSON braces."""
+        mock_openai_service.chat_completion.return_value = {
+            "choices": [{"message": {"content": '{"category": "LOCATION", "confidence": 0.9, "extracted_info": {}}'}}]
+        }
+        res = faq_agent.identify_faq_intent("¿Dónde están ubicados?")
+        assert res["category"] == "LOCATION"
+
     def test_tiqui_info_question(self, faq_agent):
         """Test tiqui tiqui info FAQ identification."""
         intent = {

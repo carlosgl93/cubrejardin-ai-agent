@@ -49,14 +49,14 @@ Analiza el mensaje y determina:
 - extracted_info: cualquier información relevante extraída (cantidades, comuna, etc.)
 
 Responde SOLO con JSON:
-{
+{{
   "category": "CATEGORY_NAME",
   "confidence": 0.95,
-  "extracted_info": {
+  "extracted_info": {{
     "square_meters": 20,
     "comuna": "Las Condes"
-  }
-}"""
+  }}
+}}"""
 
         messages = [
             {"role": "system", "content": system_prompt},
