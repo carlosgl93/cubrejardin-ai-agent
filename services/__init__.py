@@ -14,7 +14,6 @@ from .document_ingestion import (
 )
 from .audit_service import record_audit_event
 from .learning_service import LearningService
-from .mercadofiel_service import MercadoFielService
 
 # New high-priority backlog implementations
 from .message_queue import MessageQueueService, MessageProcessor, QueuedMessage, MessagePriority

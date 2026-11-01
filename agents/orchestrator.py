@@ -13,7 +13,6 @@ from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
 from services.whatsapp_service import WhatsAppService
 from services.template_service import TemplateService
-from services.mercadofiel_service import MercadoFielService
 from utils import logger
 from utils.helpers import sanitize_text
 
@@ -35,7 +34,6 @@ class AgentOrchestrator:
         vector_store: VectorStoreService,
         whatsapp_service: WhatsAppService,
         template_service: TemplateService,
-        mercadofiel_service: Optional[MercadoFielService] = None,
         tenant_id: Optional[str] = None,
     ) -> None:
         self.session = session
@@ -50,13 +48,13 @@ class AgentOrchestrator:
             self.vector_store = vector_store
         self.whatsapp_service = whatsapp_service
         self.template_service = template_service
-        self.mercadofiel_service = mercadofiel_service or MercadoFielService()
         self._bot_config: TenantBotConfig = (
             get_tenant_bot_config(tenant_id) if tenant_id else TenantBotConfig()
         )
         self.guardian = GuardianAgent(openai_service, handoff_trigger=self._bot_config.handoff_trigger)
         self.rag = RAGAgent(openai_service, self.vector_store, system_prompt=self._bot_config.system_prompt)
-        self.faq = FAQAgent(openai_service)
+        tenant_display_name = getattr(self._bot_config, "tenant_name", None) or "el negocio"
+        self.faq = FAQAgent(openai_service, business_name=tenant_display_name)
         self.handoff = HandoffAgent(
             openai_service=openai_service,
             whatsapp_service=whatsapp_service,

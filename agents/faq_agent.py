@@ -12,39 +12,41 @@ from utils import logger
 class FAQAgent:
     """Agent responsible for identifying and answering FAQ questions."""
 
-    def __init__(self, openai_service: OpenAIService) -> None:
+    def __init__(
+        self,
+        openai_service: OpenAIService,
+        business_name: str = "el negocio",
+        categories: list[str] | None = None,
+    ) -> None:
         self.openai_service = openai_service
+        self.business_name = business_name
+        self.categories = categories or [
+            "1. LOCATION - preguntas sobre ubicación, tienda física, dónde están",
+            "2. SHIPPING - preguntas sobre envíos, cobertura, despacho",
+            "3. SERVICES - preguntas sobre servicios ofrecidos o catálogo",
+            "4. PRICING - preguntas sobre precios, cotizaciones, costos",
+            "5. PAYMENT - preguntas sobre métodos de pago",
+            "6. ORDER_PROCESS - preguntas sobre cómo hacer un pedido o contratar",
+            "7. HOURS - preguntas sobre horarios de atención",
+            "8. CONTACT - preguntas sobre canales de contacto",
+            "9. GENERAL - consulta general sobre el negocio",
+            "10. NOT_FAQ - no es una pregunta FAQ",
+        ]
 
     def identify_faq_intent(self, message: str) -> Dict[str, Any]:
         """Identify if the message is asking an FAQ question and extract intent."""
         
-        system_prompt = """Eres un asistente que analiza mensajes de WhatsApp para identificar preguntas frecuentes sobre CubreJardin.
+        categories_text = "\n".join(self.categories)
+        system_prompt = f"""Eres un asistente que analiza mensajes de clientes para identificar preguntas frecuentes sobre {self.business_name}.
 
 Las categorías de preguntas frecuentes son:
 
-1. LOCATION - preguntas sobre ubicación, tienda física, dónde están
-2. REGIONS - preguntas sobre envíos a regiones fuera de Santiago
-3. INSTALLATION - preguntas sobre servicio de instalación
-4. MINIMUM_ORDER - preguntas sobre pedido mínimo o despacho mínimo
-5. LANDSCAPING - preguntas sobre paisajismo o diseño de jardines
-6. OTHER_PRODUCTS - preguntas sobre otros productos, plantas, cubresuelos
-7. WEB_PURCHASE - preguntas sobre comprar en la página web
-8. PAYMENT - preguntas sobre métodos de pago
-9. ORDER_PROCESS - preguntas sobre cómo hacer un pedido
-10. TIQUI_INFO - preguntas generales sobre el tiqui tiqui
-11. TIQUI_RABBITS - preguntas sobre si los conejos comen el tiqui tiqui
-12. TIQUI_SHADE - preguntas sobre poner tiqui tiqui a la sombra
-13. TIQUI_ON_GRASS - preguntas sobre poner tiqui tiqui sobre el pasto
-14. TIQUI_MIX_GRASS - preguntas sobre mezclar tiqui tiqui con pasto
-15. TIQUI_PRICE - preguntas sobre el precio del tiqui tiqui
-16. TIQUI_COVERAGE - preguntas sobre cuánto tiqui tiqui se necesita para X metros cuadrados
-17. GENERAL - consulta general que no cae en las categorías anteriores
-18. NOT_FAQ - no es una pregunta FAQ
+{categories_text}
 
 Analiza el mensaje y determina:
 - category: la categoría más apropiada
 - confidence: qué tan seguro estás (0.0-1.0)
-- extracted_info: cualquier información relevante extraída (metros cuadrados, comuna, etc.)
+- extracted_info: cualquier información relevante extraída (cantidades, comuna, etc.)
 
 Responde SOLO con JSON:
 {
@@ -99,7 +101,7 @@ Responde SOLO con JSON:
     ) -> str:
         """Generate a response based on FAQ intent and RAG context."""
         
-        system_prompt = """Eres un asistente de atención al cliente de CubreJardin.
+        system_prompt = f"""Eres un asistente de atención al cliente de {self.business_name}.
 
 Tu trabajo es responder preguntas usando la información de la base de conocimientos proporcionada.
 
