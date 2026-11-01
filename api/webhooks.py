@@ -583,20 +583,30 @@ async def unified_webhook(
     messages = adapter.parse_webhook(payload)
 
     for msg in messages:
-        _persist_conversation_message(
-            tenant_id=tenant_id,
-            channel=channel,
-            channel_user_id=msg.external_user_id,
-            role="user",
-            message=msg.text,
-            metadata=msg.metadata,
-        )
-        await _run_bot_pipeline(
-            tenant_id=tenant_id,
-            channel=channel,
-            channel_user_id=msg.external_user_id,
-            user_message=msg.text,
-        )
+        try:
+            _persist_conversation_message(
+                tenant_id=tenant_id,
+                channel=channel,
+                channel_user_id=msg.external_user_id,
+                role="user",
+                message=msg.text,
+                metadata=msg.metadata,
+            )
+            await _run_bot_pipeline(
+                tenant_id=tenant_id,
+                channel=channel,
+                channel_user_id=msg.external_user_id,
+                user_message=msg.text,
+            )
+        except Exception as exc:
+            logger.error(
+                "webhook_message_processing_failed: tenant=%s channel=%s user=%s error=%s",
+                tenant_id,
+                channel,
+                msg.external_user_id,
+                exc,
+                exc_info=True,
+            )
 
     return {"status": "ok", "count": len(messages), "channel": channel}
 

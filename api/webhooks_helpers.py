@@ -193,6 +193,15 @@ async def run_bot_pipeline(
                 role="assistant",
                 message=text,
             )
+    except Exception as exc:
+        logger.error(
+            "bot_pipeline_execution_failed: tenant=%s channel=%s user=%s error=%s",
+            tenant_id,
+            channel,
+            channel_user_id,
+            exc,
+            exc_info=True,
+        )
     finally:
         try:
             db.close()
