@@ -97,6 +97,56 @@ class AgentOrchestrator:
         self.session.refresh(entry)
         return entry
 
+    def _get_recent_history(
+        self,
+        user_number: str,
+        limit: int = 6,
+        current_message: str = "",
+    ) -> List[Dict[str, str]]:
+        """Fetch chronological prior conversation turns for prompt context."""
+        history: List[Dict[str, str]] = []
+        try:
+            from config.supabase import get_supabase_client
+            sb = get_supabase_client()
+            if sb:
+                query = (
+                    sb.table("conversations")
+                    .select("role, message, created_at")
+                    .eq("channel_user_id", user_number)
+                )
+                if self.tenant_id:
+                    query = query.eq("tenant_id", self.tenant_id)
+                res = query.order("created_at", desc=True).limit(limit + 2).execute()
+                rows = res.data or []
+                if rows and current_message and rows[0]["role"] == "user" and rows[0].get("message", "").strip() == current_message.strip():
+                    rows = rows[1:]
+                for r in reversed(rows[:limit]):
+                    role = "assistant" if r.get("role") in ("assistant", "system") else "user"
+                    msg = (r.get("message") or "").strip()
+                    if msg:
+                        history.append({"role": role, "content": msg})
+        except Exception as exc:
+            logger.warning("history_fetch_from_supabase_failed", extra={"error": str(exc)})
+
+        if not history and hasattr(self, "session") and self.session:
+            try:
+                from models.database import Conversation
+                q = self.session.query(Conversation).filter(Conversation.channel_user_id == user_number)
+                if self.tenant_id:
+                    q = q.filter(Conversation.tenant_id == self.tenant_id)
+                all_mem = q.all()
+                if all_mem:
+                    if current_message and all_mem[-1].role == "user" and all_mem[-1].message.strip() == current_message.strip():
+                        all_mem = all_mem[:-1]
+                    for c in all_mem[-limit:]:
+                        role = "assistant" if c.role in ("assistant", "system") else "user"
+                        if c.message.strip():
+                            history.append({"role": role, "content": c.message.strip()})
+            except Exception:
+                pass
+
+        return history
+
     async def process_message(
         self,
         user_number: str,
@@ -192,12 +242,14 @@ class AgentOrchestrator:
             )
             
             # Generate FAQ response using vector store context
+            history = self._get_recent_history(user_number, limit=6, current_message=cleaned)
             faq_answer = await asyncio.to_thread(
                 self.faq.generate_faq_response,
                 cleaned,
                 faq_intent,
                 context_text,
                 self._bot_config.system_prompt,
+                history,
             )
             
             # Use FAQ confidence (which is higher)
@@ -235,7 +287,8 @@ class AgentOrchestrator:
             )
 
         # Fall back to standard RAG if not a clear FAQ or low FAQ confidence
-        rag_response: RAGResponse = await asyncio.to_thread(self.rag.answer, cleaned)
+        history = self._get_recent_history(user_number, limit=6, current_message=cleaned)
+        rag_response: RAGResponse = await asyncio.to_thread(self.rag.answer, cleaned, history)
         logger.info(
             "rag_answer",
             extra={

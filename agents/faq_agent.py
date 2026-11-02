@@ -99,6 +99,7 @@ Responde SOLO con JSON:
         intent: Dict[str, Any],
         rag_context: str = "",
         tenant_system_prompt: str | None = None,
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> str:
         """Generate a response based on FAQ intent and RAG context."""
         
@@ -128,8 +129,10 @@ Responde la pregunta del cliente de forma concisa y conversacional usando la inf
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
         ]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": user_content})
 
         try:
             response = self.openai_service.chat_completion(

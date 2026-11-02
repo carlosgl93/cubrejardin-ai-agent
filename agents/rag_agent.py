@@ -43,14 +43,16 @@ class RAGAgent:
             best_score = max(best_score, score)
         return documents, sources, best_score
 
-    def answer(self, query: str) -> RAGResponse:
-        """Answer query using retrieved documents."""
+    def answer(self, query: str, history: Optional[List[Dict[str, str]]] = None) -> RAGResponse:
+        """Answer query using retrieved documents and prior conversation context."""
 
         context_messages, sources, best_score = self._build_context(query)
         messages = context_messages + [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": query},
         ]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": query})
         response = self.openai_service.chat_completion(messages=messages)
         answer = response["choices"][0]["message"]["content"].strip()
         confidence = float(best_score)
