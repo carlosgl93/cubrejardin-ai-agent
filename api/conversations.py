@@ -257,18 +257,15 @@ async def resume_bot(
             .execute()
         )
         if last_msgs.data and last_msgs.data[0].get("role") == "user":
-            import asyncio
             from api.webhooks_helpers import run_bot_pipeline
 
             unanswered = last_msgs.data[0]
-            asyncio.create_task(
-                run_bot_pipeline(
-                    tenant_id=ctx.tenant_id,
-                    channel=channel,
-                    channel_user_id=body.channel_user_id,
-                    user_message=unanswered.get("message", ""),
-                    message_id=unanswered.get("message_id"),
-                )
+            await run_bot_pipeline(
+                tenant_id=ctx.tenant_id,
+                channel=channel,
+                channel_user_id=body.channel_user_id,
+                user_message=unanswered.get("message", ""),
+                message_id=unanswered.get("message_id"),
             )
             triggered_reply = True
     except Exception as exc:
