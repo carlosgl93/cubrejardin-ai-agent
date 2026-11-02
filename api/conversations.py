@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from api.tenant_context import TenantContext, get_tenant_context
 from channels.registry import get_adapter
+from config.settings import get_settings
 from config.supabase import get_supabase_client
 from utils import logger
 
@@ -122,12 +123,16 @@ async def reply_conversation(
             update_data["first_response_at"] = now_iso
         supabase.table("handoffs").update(update_data).eq("id", handoff_id).execute()
     else:
+        settings = get_settings()
+        tg_chat_id = getattr(settings, "telegram_agent_chat_id", None) or "web"
         new_handoff = (
             supabase.table("handoffs")
             .insert({
                 "tenant_id": ctx.tenant_id,
                 "channel": channel,
                 "whatsapp_number": body.channel_user_id,
+                "telegram_chat_id": str(tg_chat_id),
+                "wa_service_phone_id": "web_manual",
                 "status": "active",
                 "created_at": now_iso,
                 "updated_at": now_iso,

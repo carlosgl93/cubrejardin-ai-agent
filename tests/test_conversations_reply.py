@@ -78,6 +78,10 @@ def test_reply_conversation_creates_handoff_and_sends():
         data = resp.json()
         assert data["status"] == "sent"
         assert data["handoff_id"] == "new-handoff-uuid"
+        mock_handoff_query.insert.assert_called_once()
+        inserted_payload = mock_handoff_query.insert.call_args[0][0]
+        assert inserted_payload["telegram_chat_id"] is not None
+        assert inserted_payload["wa_service_phone_id"] == "web_manual"
         mock_adapter.send_message.assert_awaited_once_with(
             recipient_id="+56912345678",
             text="Hola cliente",
