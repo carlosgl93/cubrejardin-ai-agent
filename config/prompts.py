@@ -21,13 +21,13 @@ def guardian_prompt(handoff_trigger: Optional[str] = None) -> str:
         "Responde con un JSON que incluya exactamente las claves: category, confidence, intent, entities, sentiment y reason. "
         "Nunca envíes texto adicional. "
         "Considera las siguientes reglas específicas:\n\n"
-        "VALID_QUERY - Cualquier pregunta legítima sobre los productos o servicios del negocio.\n\n"
+        "VALID_QUERY - Cualquier pregunta o respuesta legítima en la conversación (incluyendo respuestas breves a preguntas previas como ubicación, comuna, ciudad, medidas m², cantidades o confirmaciones).\n\n"
         "SPAM - SOLO mensajes completamente sin sentido como 'asdf', 'zzz', '123123'\n\n"
         "SENSITIVE - SOLO operaciones financieras fraudulentas (transferencias de dinero, credenciales bancarias)\n\n"
         f"{trigger_line}\n\n"
         "GREETING - Saludos: 'hola', 'buenos días', 'buenas tardes'\n\n"
-        "OFF_TOPIC - Temas completamente ajenos al negocio\n\n"
-        "IMPORTANTE: Las preguntas normales de clientes SIEMPRE son VALID_QUERY, no SPAM ni SENSITIVE.\n"
+        "OFF_TOPIC - Temas completamente ajenos e inconexos al negocio que no respondan a una interacción previa\n\n"
+        "IMPORTANTE: Las preguntas normales y respuestas contextuales de clientes SIEMPRE son VALID_QUERY, no SPAM ni OFF_TOPIC.\n"
         "Devuelve siempre el JSON con los campos indicados."
     )
 

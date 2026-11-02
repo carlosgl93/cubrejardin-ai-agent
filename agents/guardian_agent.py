@@ -18,17 +18,19 @@ class GuardianAgent:
         self.openai_service = openai_service
         self.system_prompt = guardian_prompt(handoff_trigger=handoff_trigger)
 
-    def classify(self, message: str) -> GuardianResult:
+    def classify(self, message: str, history: Optional[list[dict[str, str]]] = None) -> GuardianResult:
         """Classify inbound message and extract metadata."""
 
         cleaned = sanitize_text(message)
-        messages = [
+        messages: list[dict[str, str]] = [
             {"role": "system", "content": self.system_prompt},
-            {
-                "role": "user",
-                "content": cleaned,
-            },
         ]
+        if history:
+            messages.extend(history)
+        messages.append({
+            "role": "user",
+            "content": cleaned,
+        })
         response = self.openai_service.chat_completion(
             messages=messages,
             response_format={"type": "json_object"},

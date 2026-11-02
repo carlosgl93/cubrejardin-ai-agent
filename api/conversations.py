@@ -242,4 +242,36 @@ async def resume_bot(
         },
     )
 
-    return {"status": "bot_resumed", "closed_count": closed_count}
+    # If the last message was from the user (left unanswered by the human agent),
+    # have the bot respond to it immediately.
+    triggered_reply = False
+    try:
+        last_msgs = (
+            supabase.table("conversations")
+            .select("role, message, message_id")
+            .eq("tenant_id", ctx.tenant_id)
+            .eq("channel", channel)
+            .eq("channel_user_id", body.channel_user_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if last_msgs.data and last_msgs.data[0].get("role") == "user":
+            import asyncio
+            from api.webhooks_helpers import run_bot_pipeline
+
+            unanswered = last_msgs.data[0]
+            asyncio.create_task(
+                run_bot_pipeline(
+                    tenant_id=ctx.tenant_id,
+                    channel=channel,
+                    channel_user_id=body.channel_user_id,
+                    user_message=unanswered.get("message", ""),
+                    message_id=unanswered.get("message_id"),
+                )
+            )
+            triggered_reply = True
+    except Exception as exc:
+        logger.warning("failed_resuming_unanswered_reply", extra={"error": str(exc)})
+
+    return {"status": "bot_resumed", "closed_count": closed_count, "triggered_reply": triggered_reply}

@@ -157,7 +157,8 @@ class AgentOrchestrator:
         """Process inbound message and return response."""
 
         cleaned = sanitize_text(message)
-        guardian_result: GuardianResult = await asyncio.to_thread(self.guardian.classify, cleaned)
+        history = self._get_recent_history(user_number, limit=6, current_message=cleaned)
+        guardian_result: GuardianResult = await asyncio.to_thread(self.guardian.classify, cleaned, history)
         user_metadata = guardian_result.model_dump()
         if message_id:
             user_metadata["message_id"] = message_id
@@ -242,7 +243,6 @@ class AgentOrchestrator:
             )
             
             # Generate FAQ response using vector store context
-            history = self._get_recent_history(user_number, limit=6, current_message=cleaned)
             faq_answer = await asyncio.to_thread(
                 self.faq.generate_faq_response,
                 cleaned,
@@ -287,7 +287,6 @@ class AgentOrchestrator:
             )
 
         # Fall back to standard RAG if not a clear FAQ or low FAQ confidence
-        history = self._get_recent_history(user_number, limit=6, current_message=cleaned)
         rag_response: RAGResponse = await asyncio.to_thread(self.rag.answer, cleaned, history)
         logger.info(
             "rag_answer",
