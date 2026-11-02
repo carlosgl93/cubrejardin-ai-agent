@@ -6,6 +6,7 @@ in isolation by tests, and reused across handlers.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from config.supabase import get_supabase_client
@@ -156,6 +157,34 @@ async def run_bot_pipeline(
     (existing single-tenant-aware pipeline). The outbound reply is sent via the
     channel adapter so the same handle serves WhatsApp and Instagram.
     """
+
+    # Check if an active handoff exists — if so, the bot is paused for this user
+    try:
+        supabase = get_supabase_client()
+        handoff_check = (
+            supabase.table("handoffs")
+            .select("id, message_count")
+            .eq("tenant_id", tenant_id)
+            .eq("channel", channel)
+            .eq("whatsapp_number", channel_user_id)
+            .eq("status", "active")
+            .limit(1)
+            .execute()
+        )
+        if handoff_check.data:
+            h_id = handoff_check.data[0]["id"]
+            count = (handoff_check.data[0].get("message_count") or 0) + 1
+            supabase.table("handoffs").update({
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "message_count": count,
+            }).eq("id", h_id).execute()
+            logger.info(
+                "bot_pipeline_paused_during_active_handoff",
+                extra={"tenant_id": tenant_id, "channel": channel, "user": channel_user_id, "handoff_id": h_id},
+            )
+            return
+    except Exception as exc:
+        logger.warning("handoff_check_failed_proceeding", extra={"error": str(exc)})
 
     from agents.orchestrator import AgentOrchestrator
     from channels.registry import get_adapter
