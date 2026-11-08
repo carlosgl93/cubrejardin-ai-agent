@@ -5,7 +5,11 @@ from .vector_store import VectorStoreService
 from .whatsapp_service import WhatsAppService
 from .template_service import TemplateService
 from .telegram_service import TelegramService
-from .tenant_config_service import get_tenant_bot_config, TenantBotConfig
+from .tenant_config_service import (
+    get_tenant_bot_config,
+    invalidate_tenant_bot_config,
+    TenantBotConfig,
+)
 from .document_ingestion import (
     chunk_text,
     _split_markdown_sections,
@@ -42,6 +46,7 @@ __all__ = [
     "TemplateService",
     "TelegramService",
     "get_tenant_bot_config",
+    "invalidate_tenant_bot_config",
     "TenantBotConfig",
     "chunk_text",
     "_split_markdown_sections",

@@ -150,15 +150,26 @@ def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
     if not result.data:
         return None
     handoff = result.data[0]
-    updated_at = datetime.fromisoformat(handoff["updated_at"].replace("Z", "+00:00"))
-    if datetime.now(timezone.utc) - updated_at > timedelta(hours=HANDOFF_EXPIRY_HOURS):
-        sb.table("handoffs").update({
-            "status": "expired",
-            "closed_at": datetime.now(timezone.utc).isoformat(),
-            "closed_by": "auto_expired",
-        }).eq("id", handoff["id"]).execute()
-        logger.info("handoff_auto_expired", extra={"handoff_id": handoff["id"], "whatsapp_number": whatsapp_number})
-        return None
+    updated_at_raw = handoff.get("updated_at")
+    from services.tenant_config_service import get_tenant_bot_config
+    t_cfg = get_tenant_bot_config(tenant_id)
+
+    if t_cfg.handoff_auto_return_enabled and updated_at_raw:
+        try:
+            updated_at = datetime.fromisoformat(str(updated_at_raw).replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) - updated_at > timedelta(minutes=t_cfg.handoff_timeout_minutes):
+                sb.table("handoffs").update({
+                    "status": "expired",
+                    "closed_at": datetime.now(timezone.utc).isoformat(),
+                    "closed_by": "auto_timeout",
+                }).eq("id", handoff["id"]).execute()
+                logger.info(
+                    "handoff_auto_expired",
+                    extra={"handoff_id": handoff["id"], "whatsapp_number": whatsapp_number, "timeout_minutes": t_cfg.handoff_timeout_minutes},
+                )
+                return None
+        except Exception as parse_err:
+            logger.warning("handoff_updated_at_parse_failed", extra={"error": str(parse_err)})
     return handoff
 
 

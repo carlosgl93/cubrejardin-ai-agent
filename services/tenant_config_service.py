@@ -18,6 +18,8 @@ class TenantBotConfig:
     greeting: Optional[str] = None
     handoff_trigger: Optional[str] = None
     tenant_name: str = "el negocio"
+    handoff_auto_return_enabled: bool = True
+    handoff_timeout_minutes: int = 10
 
 
 @dataclass
@@ -40,7 +42,7 @@ def get_tenant_bot_config(tenant_id: str) -> TenantBotConfig:
         sb = get_supabase_client()
         result = (
             sb.table("tenant_bot_config")
-            .select("system_prompt, greeting, handoff_trigger")
+            .select("system_prompt, greeting, handoff_trigger, handoff_auto_return_enabled, handoff_timeout_minutes")
             .eq("tenant_id", tenant_id)
             .limit(1)
             .execute()
@@ -62,11 +64,15 @@ def get_tenant_bot_config(tenant_id: str) -> TenantBotConfig:
 
         if result.data:
             row = result.data[0]
+            auto_return = row.get("handoff_auto_return_enabled")
+            timeout_min = row.get("handoff_timeout_minutes")
             config = TenantBotConfig(
                 system_prompt=row.get("system_prompt") or None,
                 greeting=row.get("greeting") or None,
                 handoff_trigger=row.get("handoff_trigger") or None,
                 tenant_name=tenant_name,
+                handoff_auto_return_enabled=True if auto_return is None else bool(auto_return),
+                handoff_timeout_minutes=int(timeout_min) if timeout_min is not None else 10,
             )
         else:
             config = TenantBotConfig(tenant_name=tenant_name)
@@ -76,3 +82,8 @@ def get_tenant_bot_config(tenant_id: str) -> TenantBotConfig:
 
     _cache[tenant_id] = _CacheEntry(config=config, expires_at=now + _CACHE_TTL)
     return config
+
+
+def invalidate_tenant_bot_config(tenant_id: str) -> None:
+    """Clear in-process cached bot config for a tenant."""
+    _cache.pop(tenant_id, None)

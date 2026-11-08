@@ -181,6 +181,8 @@ class BotConfigRequest(BaseModel):
     greeting: str | None = None
     handoff_trigger: str | None = None
     business_hours: dict | None = None
+    handoff_auto_return_enabled: bool | None = None
+    handoff_timeout_minutes: int | None = None
 
 
 class BotConfigResponse(BaseModel):
@@ -190,6 +192,8 @@ class BotConfigResponse(BaseModel):
     greeting: str | None
     handoff_trigger: str | None
     business_hours: dict
+    handoff_auto_return_enabled: bool = True
+    handoff_timeout_minutes: int = 10
 
 
 @router.get("/config", response_model=BotConfigResponse)
@@ -212,8 +216,12 @@ async def get_bot_config(ctx: TenantContext = Depends(get_tenant_context)):
             greeting=None,
             handoff_trigger=None,
             business_hours={"enabled": False, "timezone": "America/Santiago", "schedule": {}},
+            handoff_auto_return_enabled=True,
+            handoff_timeout_minutes=10,
         )
     row = result.data[0]
+    auto_return = row.get("handoff_auto_return_enabled")
+    timeout_min = row.get("handoff_timeout_minutes")
     return BotConfigResponse(
         id=row["id"],
         tenant_id=row["tenant_id"],
@@ -221,6 +229,8 @@ async def get_bot_config(ctx: TenantContext = Depends(get_tenant_context)):
         greeting=row.get("greeting"),
         handoff_trigger=row.get("handoff_trigger"),
         business_hours=row.get("business_hours") or {},
+        handoff_auto_return_enabled=True if auto_return is None else bool(auto_return),
+        handoff_timeout_minutes=int(timeout_min) if timeout_min is not None else 10,
     )
 
 
@@ -233,6 +243,9 @@ async def upsert_bot_config(
     if ctx.role not in ("owner", "admin"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
 
+    if body.handoff_timeout_minutes is not None and body.handoff_timeout_minutes < 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="handoff_timeout_minutes must be >= 1")
+
     sb = get_supabase_client()
     payload = {
         "tenant_id": ctx.tenant_id,
@@ -243,7 +256,12 @@ async def upsert_bot_config(
         .upsert(payload, on_conflict="tenant_id")
         .execute()
     )
+    from services.tenant_config_service import invalidate_tenant_bot_config
+    invalidate_tenant_bot_config(ctx.tenant_id)
+
     row = result.data[0]
+    auto_return = row.get("handoff_auto_return_enabled")
+    timeout_min = row.get("handoff_timeout_minutes")
     return BotConfigResponse(
         id=row["id"],
         tenant_id=row["tenant_id"],
@@ -251,4 +269,6 @@ async def upsert_bot_config(
         greeting=row.get("greeting"),
         handoff_trigger=row.get("handoff_trigger"),
         business_hours=row.get("business_hours") or {},
+        handoff_auto_return_enabled=True if auto_return is None else bool(auto_return),
+        handoff_timeout_minutes=int(timeout_min) if timeout_min is not None else 10,
     )

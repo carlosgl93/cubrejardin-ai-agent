@@ -6,7 +6,7 @@ in isolation by tests, and reused across handlers.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from config.supabase import get_supabase_client
@@ -158,12 +158,12 @@ async def run_bot_pipeline(
     channel adapter so the same handle serves WhatsApp and Instagram.
     """
 
-    # Check if an active handoff exists — if so, the bot is paused for this user
+    # Check if an active handoff exists — if so, check if auto-return has expired or pause bot
     try:
         supabase = get_supabase_client()
         handoff_check = (
             supabase.table("handoffs")
-            .select("id, message_count")
+            .select("id, message_count, updated_at")
             .eq("tenant_id", tenant_id)
             .eq("channel", channel)
             .eq("whatsapp_number", channel_user_id)
@@ -172,17 +172,52 @@ async def run_bot_pipeline(
             .execute()
         )
         if handoff_check.data:
-            h_id = handoff_check.data[0]["id"]
-            count = (handoff_check.data[0].get("message_count") or 0) + 1
-            supabase.table("handoffs").update({
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-                "message_count": count,
-            }).eq("id", h_id).execute()
-            logger.info(
-                "bot_pipeline_paused_during_active_handoff",
-                extra={"tenant_id": tenant_id, "channel": channel, "user": channel_user_id, "handoff_id": h_id},
-            )
-            return
+            h = handoff_check.data[0]
+            h_id = h["id"]
+            updated_at_raw = h.get("updated_at")
+
+            from services.tenant_config_service import get_tenant_bot_config
+            t_cfg = get_tenant_bot_config(tenant_id)
+
+            should_expire = False
+            if t_cfg.handoff_auto_return_enabled and updated_at_raw:
+                try:
+                    updated_at = datetime.fromisoformat(str(updated_at_raw).replace("Z", "+00:00"))
+                    timeout_delta = timedelta(minutes=t_cfg.handoff_timeout_minutes)
+                    if datetime.now(timezone.utc) - updated_at > timeout_delta:
+                        should_expire = True
+                except Exception as parse_err:
+                    logger.warning("handoff_updated_at_parse_failed", extra={"error": str(parse_err)})
+
+            if should_expire:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                supabase.table("handoffs").update({
+                    "status": "expired",
+                    "closed_at": now_iso,
+                    "closed_by": "auto_timeout",
+                }).eq("id", h_id).execute()
+                logger.info(
+                    "handoff_auto_expired_timeout",
+                    extra={
+                        "tenant_id": tenant_id,
+                        "channel": channel,
+                        "user": channel_user_id,
+                        "handoff_id": h_id,
+                        "timeout_minutes": t_cfg.handoff_timeout_minutes,
+                    },
+                )
+                # Auto-expired: fall through so bot answers immediately
+            else:
+                count = (h.get("message_count") or 0) + 1
+                supabase.table("handoffs").update({
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "message_count": count,
+                }).eq("id", h_id).execute()
+                logger.info(
+                    "bot_pipeline_paused_during_active_handoff",
+                    extra={"tenant_id": tenant_id, "channel": channel, "user": channel_user_id, "handoff_id": h_id},
+                )
+                return
     except Exception as exc:
         logger.warning("handoff_check_failed_proceeding", extra={"error": str(exc)})
 
