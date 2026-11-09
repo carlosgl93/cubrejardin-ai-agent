@@ -210,7 +210,6 @@ async def run_bot_pipeline(
             else:
                 count = (h.get("message_count") or 0) + 1
                 supabase.table("handoffs").update({
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
                     "message_count": count,
                 }).eq("id", h_id).execute()
                 logger.info(

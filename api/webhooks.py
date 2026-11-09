@@ -386,7 +386,6 @@ async def whatsapp_webhook(
                         }).execute()
                         sb_touch = get_supabase_client()
                         sb_touch.table("handoffs").update({
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
                             "message_count": (active_handoff.get("message_count") or 0) + 1,
                         }).eq("id", active_handoff["id"]).execute()
                         delivery_results.append({"tenant_id": tenant_id, "user": user_number, "status": "forwarded_to_agent"})
