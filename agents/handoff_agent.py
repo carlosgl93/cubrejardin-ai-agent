@@ -217,7 +217,14 @@ class HandoffAgent:
         message = (
             "Gracias por tu paciencia. Un especialista humano revisará tu caso y te contactará en menos de 2 horas."
         )
-        await self.whatsapp_service.send_text_message(user_number, message)
+        try:
+            if self.whatsapp_service and phone_id and not phone_id.startswith("web"):
+                await self.whatsapp_service.send_text_message(user_number, message)
+        except Exception as exc:
+            logger.warning(
+                "handoff_direct_whatsapp_send_failed",
+                extra={"user": user_number, "error": str(exc)},
+            )
         await self.pass_control_to_human(conversation=conversation, metadata=details)
         await self._notify_telegram(
             user_number=user_number,
