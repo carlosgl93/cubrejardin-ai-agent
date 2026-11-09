@@ -158,10 +158,12 @@ def _get_active_handoff(whatsapp_number: str, tenant_id: str) -> Optional[dict]:
         try:
             updated_at = datetime.fromisoformat(str(updated_at_raw).replace("Z", "+00:00"))
             if datetime.now(timezone.utc) - updated_at > timedelta(minutes=t_cfg.handoff_timeout_minutes):
+                now_iso = datetime.now(timezone.utc).isoformat()
                 sb.table("handoffs").update({
                     "status": "expired",
-                    "closed_at": datetime.now(timezone.utc).isoformat(),
+                    "closed_at": now_iso,
                     "closed_by": "auto_timeout",
+                    "updated_at": now_iso,
                 }).eq("id", handoff["id"]).execute()
                 logger.info(
                     "handoff_auto_expired",

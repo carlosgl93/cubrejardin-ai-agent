@@ -195,6 +195,7 @@ async def run_bot_pipeline(
                     "status": "expired",
                     "closed_at": now_iso,
                     "closed_by": "auto_timeout",
+                    "updated_at": now_iso,
                 }).eq("id", h_id).execute()
                 logger.info(
                     "handoff_auto_expired_timeout",
