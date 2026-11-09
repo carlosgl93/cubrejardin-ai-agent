@@ -20,6 +20,12 @@ class TenantBotConfig:
     tenant_name: str = "el negocio"
     handoff_auto_return_enabled: bool = True
     handoff_timeout_minutes: int = 10
+    notify_email_enabled: bool = False
+    notify_email_recipient: Optional[str] = None
+    notify_whatsapp_enabled: bool = False
+    notify_whatsapp_recipient: Optional[str] = None
+    notify_conversion_alerts: bool = True
+    notify_handoff_alerts: bool = True
 
 
 @dataclass
@@ -42,7 +48,11 @@ def get_tenant_bot_config(tenant_id: str) -> TenantBotConfig:
         sb = get_supabase_client()
         result = (
             sb.table("tenant_bot_config")
-            .select("system_prompt, greeting, handoff_trigger, handoff_auto_return_enabled, handoff_timeout_minutes")
+            .select(
+                "system_prompt, greeting, handoff_trigger, handoff_auto_return_enabled, handoff_timeout_minutes, "
+                "notify_email_enabled, notify_email_recipient, notify_whatsapp_enabled, notify_whatsapp_recipient, "
+                "notify_conversion_alerts, notify_handoff_alerts"
+            )
             .eq("tenant_id", tenant_id)
             .limit(1)
             .execute()
@@ -73,6 +83,12 @@ def get_tenant_bot_config(tenant_id: str) -> TenantBotConfig:
                 tenant_name=tenant_name,
                 handoff_auto_return_enabled=True if auto_return is None else bool(auto_return),
                 handoff_timeout_minutes=int(timeout_min) if timeout_min is not None else 10,
+                notify_email_enabled=bool(row.get("notify_email_enabled")),
+                notify_email_recipient=row.get("notify_email_recipient") or None,
+                notify_whatsapp_enabled=bool(row.get("notify_whatsapp_enabled")),
+                notify_whatsapp_recipient=row.get("notify_whatsapp_recipient") or None,
+                notify_conversion_alerts=True if row.get("notify_conversion_alerts") is None else bool(row.get("notify_conversion_alerts")),
+                notify_handoff_alerts=True if row.get("notify_handoff_alerts") is None else bool(row.get("notify_handoff_alerts")),
             )
         else:
             config = TenantBotConfig(tenant_name=tenant_name)

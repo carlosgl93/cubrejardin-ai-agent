@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field("", validation_alias="TELEGRAM_BOT_TOKEN")
     telegram_agent_chat_id: str = Field("", validation_alias="TELEGRAM_AGENT_CHAT_ID")
 
+    # 📧 Resend / Email Alerts
+    resend_api_key: str = Field("", validation_alias="RESEND_API_KEY")
+    resend_from_email: str = Field("alertas@sgcloud.cl", validation_alias="RESEND_FROM_EMAIL")
+
     # Comma-separated emails of super-admins who can access the backoffice
     super_admin_emails: str = Field("", validation_alias="SUPER_ADMIN_EMAILS")
 

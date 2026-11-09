@@ -233,4 +233,17 @@ class HandoffAgent:
             tenant_id=tenant_id,
             phone_id=phone_id,
         )
+        try:
+            from services.alert_notification_service import dispatch_alert
+
+            await dispatch_alert(
+                tenant_id=tenant_id,
+                alert_type="handoff",
+                channel="whatsapp" if phone_id and not phone_id.startswith("web") else "multichannel",
+                customer_id=user_number,
+                reason=reason,
+                recent_messages=last_message or "(sin mensaje)",
+            )
+        except Exception as exc:
+            logger.warning("dispatch_alert_failed", extra={"tenant_id": tenant_id, "error": str(exc)})
         return message

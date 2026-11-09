@@ -5,6 +5,7 @@ from .vector_store import VectorStoreService
 from .whatsapp_service import WhatsAppService
 from .template_service import TemplateService
 from .telegram_service import TelegramService
+from .email_service import EmailService
 from .tenant_config_service import (
     get_tenant_bot_config,
     invalidate_tenant_bot_config,
