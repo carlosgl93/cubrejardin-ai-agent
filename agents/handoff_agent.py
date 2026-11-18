@@ -136,14 +136,13 @@ class HandoffAgent:
         phone_id: str,
         channel: str = "whatsapp",
     ) -> Optional[int]:
-        """Send handoff notification to Telegram agent and persist active handoff."""
+        """Send handoff notification to Telegram agent when configured."""
 
         chat_id = settings.telegram_agent_chat_id
         if not chat_id or not settings.telegram_bot_token:
             logger.warning("telegram_not_configured")
             return None
 
-        # Fetch last messages for context
         history_text = ""
         try:
             from config.supabase import get_supabase_client as _get_sb
@@ -184,23 +183,37 @@ class HandoffAgent:
         finally:
             await tg.close()
 
-        # Persist active handoff in Supabase
-        try:
-            sb = get_supabase_client()
-            sb.table("handoffs").insert({
-                "tenant_id": tenant_id,
-                "whatsapp_number": user_number,
-                "telegram_chat_id": chat_id,
-                "telegram_message_id": message_id,
-                "wa_service_phone_id": phone_id,
-                "channel": channel,
-                "status": "active",
-            }).execute()
-        except Exception as exc:
-            logger.error("handoff_supabase_persist_error", extra={"error": str(exc)})
-
         logger.info("telegram_handoff_notified", extra={"user": user_number, "message_id": message_id})
         return message_id
+
+    def _persist_active_handoff(
+        self,
+        *,
+        tenant_id: str,
+        user_number: str,
+        phone_id: str,
+        channel: str,
+        telegram_message_id: Optional[int],
+    ) -> None:
+        """Persist active handoff in Supabase regardless of Telegram configuration."""
+
+        payload: Dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "whatsapp_number": user_number,
+            "wa_service_phone_id": phone_id,
+            "channel": channel,
+            "status": "active",
+        }
+        if settings.telegram_agent_chat_id:
+            payload["telegram_chat_id"] = settings.telegram_agent_chat_id
+        if telegram_message_id is not None:
+            payload["telegram_message_id"] = telegram_message_id
+
+        try:
+            sb = get_supabase_client()
+            sb.table("handoffs").insert(payload).execute()
+        except Exception as exc:
+            logger.error("handoff_supabase_persist_error", extra={"error": str(exc)})
 
     async def escalate(
         self,
@@ -213,7 +226,7 @@ class HandoffAgent:
         last_message: str = "",
         channel: str = "whatsapp",
     ) -> str:
-        """Escalate conversation and notify user + Telegram agent."""
+        """Escalate conversation, persist active handoff, and notify channels."""
 
         details = metadata or {"reason": "low_confidence"}
         reason = details.get("reason", "low_confidence")
@@ -229,13 +242,20 @@ class HandoffAgent:
                 extra={"user": user_number, "error": str(exc)},
             )
         await self.pass_control_to_human(conversation=conversation, metadata=details)
-        await self._notify_telegram(
+        telegram_message_id = await self._notify_telegram(
             user_number=user_number,
             last_message=last_message or "(sin mensaje)",
             reason=reason,
             tenant_id=tenant_id,
             phone_id=phone_id,
             channel=channel,
+        )
+        self._persist_active_handoff(
+            tenant_id=tenant_id,
+            user_number=user_number,
+            phone_id=phone_id,
+            channel=channel,
+            telegram_message_id=telegram_message_id,
         )
         try:
             from services.alert_notification_service import dispatch_alert

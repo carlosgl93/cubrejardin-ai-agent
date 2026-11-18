@@ -293,3 +293,46 @@ def test_get_active_handoff_auto_expires_when_timeout_exceeded():
         update_args = mock_query.update.call_args[0][0]
         assert update_args["status"] == "expired"
         assert update_args["closed_by"] == "auto_timeout"
+
+
+@pytest.mark.asyncio
+async def test_handoff_escalate_persists_row_without_telegram():
+    """HandoffAgent.escalate must insert an active handoffs row even when Telegram is unconfigured."""
+    from agents.handoff_agent import HandoffAgent
+    from models.database import SessionLocal
+
+    fake_sb = MagicMock()
+    mock_table = MagicMock()
+    fake_sb.table.return_value = mock_table
+    mock_table.insert.return_value.execute.return_value = MagicMock(data=[{"id": "h-new"}])
+
+    conv = MagicMock()
+    conv.id = 42
+    conv.channel_user_id = "ig-user-99"
+
+    wa = MagicMock()
+    wa.pass_thread_control = AsyncMock()
+    openai_svc = MagicMock()
+    session = SessionLocal()
+
+    agent = HandoffAgent(openai_service=openai_svc, whatsapp_service=wa, session=session)
+    with patch("agents.handoff_agent.get_supabase_client", return_value=fake_sb), \
+         patch("agents.handoff_agent.settings.telegram_bot_token", ""), \
+         patch("agents.handoff_agent.settings.telegram_agent_chat_id", ""), \
+         patch("services.alert_notification_service.dispatch_alert", new_callable=AsyncMock):
+        await agent.escalate(
+            conv,
+            "ig-user-99",
+            metadata={"reason": "user_request"},
+            tenant_id=FAKE_TENANT_ID,
+            phone_id="ig-page-1",
+            last_message="Quiero hablar con un humano",
+            channel="instagram",
+        )
+
+    fake_sb.table.assert_called_with("handoffs")
+    inserted = mock_table.insert.call_args[0][0]
+    assert inserted["tenant_id"] == FAKE_TENANT_ID
+    assert inserted["whatsapp_number"] == "ig-user-99"
+    assert inserted["channel"] == "instagram"
+    assert inserted["status"] == "active"

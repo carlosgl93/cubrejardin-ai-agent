@@ -35,10 +35,20 @@ jobs:
             --region us-central1 \
             --env-vars-file /tmp/env.prod.yaml \
             --project sg-cloud-cefee
+          rm /tmp/env.prod.yaml
+
+          EXTRA_VARS="INSTAGRAM_PAGE_ID=1028203907040559,INSTAGRAM_IG_USER_ID=17841403976567314"
+          if [ -n "$RESEND_API_KEY" ]; then
+            EXTRA_VARS="${EXTRA_VARS},RESEND_API_KEY=${RESEND_API_KEY}"
+          fi
+          if [ -n "$RESEND_FROM_EMAIL" ]; then
+            EXTRA_VARS="${EXTRA_VARS},RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL}"
+          fi
           gcloud run services update whatsapp-api \
             --region us-central1 \
-            --update-env-vars="INSTAGRAM_PAGE_ID=1028203907040559,INSTAGRAM_IG_USER_ID=17841403976567314" \
+            --update-env-vars="${EXTRA_VARS}" \
             --project sg-cloud-cefee
-          rm /tmp/env.prod.yaml
         env:
           ENV_PROD_YAML: ${{ secrets.ENV_PROD_YAML }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL }}
