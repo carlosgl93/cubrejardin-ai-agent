@@ -211,3 +211,63 @@ def test_pgvector_delete_documents_by_source_title_is_tenant_scoped(
 
     assert deleted == 1
     assert [row["tenant_id"] for row in client.documents] == ["tenant-b"]
+
+
+def test_pgvector_search_hybrid_calls_rpc_with_tenant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hybrid searches must call match_documents_hybrid with tenant scope and RRF params."""
+
+    client = FakeSupabaseClient()
+    client.rpc_results = [
+        {
+            "id": "doc-10",
+            "title": "Despacho RM",
+            "content": "Envío a Las Condes en 24h",
+            "metadata": {"source_title": "Despacho RM"},
+            "similarity": 0.72,
+            "fts_rank": 0.45,
+            "rrf_score": 0.032,
+        }
+    ]
+    monkeypatch.setattr("services.vector_store.get_supabase_client", lambda: client)
+
+    service = VectorStoreService(tenant_id="tenant-a", backend="pgvector")
+    results = service.search_hybrid([0.1, 0.2, 0.3], "Las Condes", top_k=12, rrf_k=60)
+
+    assert len(results) == 1
+    score, doc = results[0]
+    assert score == 0.72
+    assert doc["title"] == "Despacho RM"
+    assert doc["fts_rank"] == 0.45
+    assert doc["rrf_score"] == 0.032
+    assert client.rpc_calls == [
+        (
+            "match_documents_hybrid",
+            {
+                "query_embedding": [0.1, 0.2, 0.3],
+                "query_text": "Las Condes",
+                "match_count": 12,
+                "p_tenant_id": "tenant-a",
+                "rrf_k": 60,
+            },
+        )
+    ]
+
+
+def test_local_search_hybrid_boosts_exact_keyword_match(tmp_path) -> None:
+    """Local hybrid search should rank exact keyword matches higher via RRF."""
+
+    index_file = tmp_path / "vec.json"
+    service = VectorStoreService(index_path=str(index_file), backend="local")
+    service.add_embeddings(
+        [[1.0, 0.0], [0.99, 0.14]],
+        [
+            {"title": "Politica general", "content": "Cobertura en todo Chile"},
+            {"title": "Cobertura RM", "content": "Despacho gratis a Las Condes SKU-402"},
+        ],
+    )
+
+    results = service.search_hybrid([1.0, 0.0], "Las Condes SKU-402", top_k=2)
+
+    assert len(results) == 2
+    assert results[0][1]["title"] == "Cobertura RM"
+    assert results[0][1]["fts_rank"] > 0.0

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +15,13 @@ from utils import logger
 _LOCAL_BACKEND = "local"
 _PGVECTOR_BACKEND = "pgvector"
 _PGVECTOR_RESERVED_KEYS = {"tenant_id", "title", "content", "file_type", "metadata"}
+_TOKEN_RE = re.compile(r"[0-9a-zA-ZáéíóúüñÁÉÍÓÚÜÑ]{2,}")
+
+
+def _tokenize_text(text: str) -> set[str]:
+    """Extract normalized lowercase alphanumeric tokens for local keyword matching."""
+
+    return {match.group(0).lower() for match in _TOKEN_RE.finditer(text or "")}
 
 
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
@@ -121,6 +129,20 @@ class VectorStoreService:
         filtered = [item for item in scores if item[0] >= threshold]
         filtered.sort(key=lambda item: item[0], reverse=True)
         return filtered[:top_k]
+
+    def search_hybrid(
+        self,
+        embedding: List[float],
+        query_text: str,
+        top_k: int = 12,
+        *,
+        rrf_k: int = 60,
+    ) -> List[Tuple[float, Dict[str, Any]]]:
+        """Search documents by combining dense vector similarity and lexical rank via RRF."""
+
+        if self.backend == _PGVECTOR_BACKEND:
+            return self._search_hybrid_pgvector(embedding, query_text, top_k, rrf_k)
+        return self._search_hybrid_local(embedding, query_text, top_k, rrf_k)
 
     def delete_documents_by_source_title(
         self,
@@ -250,3 +272,99 @@ class VectorStoreService:
             )
             for row in (result.data or [])
         ]
+
+    def _search_hybrid_pgvector(
+        self,
+        embedding: List[float],
+        query_text: str,
+        top_k: int,
+        rrf_k: int,
+    ) -> List[Tuple[float, Dict[str, Any]]]:
+        """Search tenant documents through the match_documents_hybrid RPC."""
+
+        if not self.tenant_id:
+            raise ValueError("tenant_id is required when searching with pgvector")
+
+        result = get_supabase_client().rpc(
+            settings.match_documents_hybrid_rpc,
+            {
+                "query_embedding": embedding,
+                "query_text": query_text,
+                "match_count": top_k,
+                "p_tenant_id": self.tenant_id,
+                "rrf_k": rrf_k,
+            },
+        ).execute()
+
+        return [
+            (
+                float(row.get("similarity") or 0.0),
+                {
+                    "id": row.get("id"),
+                    "title": row.get("title", ""),
+                    "content": row.get("content", ""),
+                    "metadata": row.get("metadata") or {},
+                    "fts_rank": float(row.get("fts_rank") or 0.0),
+                    "rrf_score": float(row.get("rrf_score") or 0.0),
+                },
+            )
+            for row in (result.data or [])
+        ]
+
+    def _search_hybrid_local(
+        self,
+        embedding: List[float],
+        query_text: str,
+        top_k: int,
+        rrf_k: int,
+    ) -> List[Tuple[float, Dict[str, Any]]]:
+        """Fuse dense cosine similarity and keyword overlap with RRF on the local store."""
+
+        if not self.vectors or not self.metadata:
+            return []
+
+        query_tokens = _tokenize_text(query_text)
+        dense_ranked = sorted(
+            (
+                (idx, cosine_similarity(embedding, vector))
+                for idx, vector in enumerate(self.vectors)
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        dense_ranks: Dict[int, int] = {
+            idx: rank for rank, (idx, _) in enumerate(dense_ranked, start=1)
+        }
+        dense_sims: Dict[int, float] = dict(dense_ranked)
+
+        sparse_scores: List[Tuple[int, float]] = []
+        if query_tokens:
+            for idx, meta in enumerate(self.metadata):
+                doc_text = f"{meta.get('title', '')} {meta.get('content', '')}"
+                doc_tokens = _tokenize_text(doc_text)
+                hits = len(query_tokens & doc_tokens)
+                if hits > 0:
+                    sparse_scores.append((idx, hits / len(query_tokens)))
+        sparse_scores.sort(key=lambda item: item[1], reverse=True)
+        sparse_ranks: Dict[int, int] = {
+            idx: rank for rank, (idx, _) in enumerate(sparse_scores, start=1)
+        }
+        sparse_rank_map: Dict[int, float] = dict(sparse_scores)
+
+        fused: List[Tuple[float, float, int]] = []
+        for idx in range(len(self.metadata)):
+            rrf_score = 0.0
+            if idx in dense_ranks:
+                rrf_score += 1.0 / (rrf_k + dense_ranks[idx])
+            if idx in sparse_ranks:
+                rrf_score += 1.0 / (rrf_k + sparse_ranks[idx])
+            fused.append((rrf_score, dense_sims.get(idx, 0.0), idx))
+
+        fused.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        results: List[Tuple[float, Dict[str, Any]]] = []
+        for rrf_score, sim, idx in fused[:top_k]:
+            doc = dict(self.metadata[idx])
+            doc["fts_rank"] = sparse_rank_map.get(idx, 0.0)
+            doc["rrf_score"] = rrf_score
+            results.append((sim, doc))
+        return results

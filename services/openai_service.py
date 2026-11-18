@@ -68,7 +68,12 @@ class OpenAIService:
                 time.sleep(sleep)
 
     def chat_completion(
-        self, *, messages: Any, response_format: Optional[Dict[str, Any]] = None
+        self,
+        *,
+        messages: Any,
+        response_format: Optional[Dict[str, Any]] = None,
+        tools: Optional[Any] = None,
+        tool_choice: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Call OpenAI ChatCompletion with retries."""
 
@@ -80,6 +85,10 @@ class OpenAIService:
         }
         if response_format:
             kwargs["response_format"] = response_format
+        if tools:
+            kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
 
         logger.info("openai_request", extra={"messages": len(messages)})
         response = self._retry(self.client.chat.completions.create, **kwargs)

@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     vector_store_path: str = Field("data/vector_store/index.json", validation_alias="VECTOR_STORE_PATH")
     documents_path: str = Field("data/documents", validation_alias="DOCUMENTS_PATH")
     match_documents_rpc: str = Field("match_documents", validation_alias="MATCH_DOCUMENTS_RPC")
+    match_documents_hybrid_rpc: str = Field(
+        "match_documents_hybrid",
+        validation_alias="MATCH_DOCUMENTS_HYBRID_RPC",
+    )
     vector_search_min_similarity: float = Field(
         0.0,
         validation_alias="VECTOR_SEARCH_MIN_SIMILARITY",
