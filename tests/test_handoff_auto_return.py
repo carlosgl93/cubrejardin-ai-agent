@@ -334,5 +334,6 @@ async def test_handoff_escalate_persists_row_without_telegram():
     inserted = mock_table.insert.call_args[0][0]
     assert inserted["tenant_id"] == FAKE_TENANT_ID
     assert inserted["whatsapp_number"] == "ig-user-99"
+    assert inserted["telegram_chat_id"] == ""
     assert inserted["channel"] == "instagram"
     assert inserted["status"] == "active"

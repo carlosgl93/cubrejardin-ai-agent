@@ -200,12 +200,11 @@ class HandoffAgent:
         payload: Dict[str, Any] = {
             "tenant_id": tenant_id,
             "whatsapp_number": user_number,
+            "telegram_chat_id": settings.telegram_agent_chat_id or "",
             "wa_service_phone_id": phone_id,
             "channel": channel,
             "status": "active",
         }
-        if settings.telegram_agent_chat_id:
-            payload["telegram_chat_id"] = settings.telegram_agent_chat_id
         if telegram_message_id is not None:
             payload["telegram_message_id"] = telegram_message_id
 
