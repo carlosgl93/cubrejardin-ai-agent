@@ -98,7 +98,7 @@ class Settings(BaseSettings):
 
     # 📧 Resend / Email Alerts
     resend_api_key: str = Field("", validation_alias="RESEND_API_KEY")
-    resend_from_email: str = Field("alertas@sgcloud.cl", validation_alias="RESEND_FROM_EMAIL")
+    resend_from_email: str = Field("alertas@mail.sgcloud.cl", validation_alias="RESEND_FROM_EMAIL")
 
     # Comma-separated emails of super-admins who can access the backoffice
     super_admin_emails: str = Field("", validation_alias="SUPER_ADMIN_EMAILS")

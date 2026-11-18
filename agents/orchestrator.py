@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from dataclasses import dataclass
+import time
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import desc, select
 
 from models.database import Conversation, DatabaseSession, utc_now
 from models.schemas import AgentResponse, GuardianResult, RAGResponse
+from services import alert_notification_service
 from services.openai_service import OpenAIService
 from services.vector_store import VectorStoreService
 from services.whatsapp_service import WhatsAppService
@@ -21,6 +24,52 @@ from .handoff_agent import HandoffAgent
 from .rag_agent import RAGAgent
 from .faq_agent import FAQAgent
 from services.tenant_config_service import get_tenant_bot_config, TenantBotConfig
+
+_CONVERSION_FAQ_CATEGORIES = frozenset({"PRICING", "ORDER_PROCESS"})
+_CONVERSION_FAQ_MIN_CONFIDENCE = 0.7
+_CONVERSION_INTENT_KEYWORDS = (
+    "cotizar",
+    "comprar",
+    "precio",
+    "pedido",
+    "purchase",
+    "pricing",
+    "order",
+)
+_CONVERSION_ALERT_TTL_SECONDS = 1800.0
+_conversion_alert_sent: dict[tuple[str, str], float] = {}
+
+
+@dataclass(frozen=True)
+class ConversionSignal:
+    """Detected commercial conversion intent for a customer turn."""
+
+    reason: str
+
+
+def _detect_conversion_signal(
+    guardian_result: GuardianResult,
+    faq_intent: Optional[Dict[str, Any]],
+) -> Optional[ConversionSignal]:
+    """Return a ConversionSignal when FAQ or Guardian indicates purchase/pricing intent."""
+    if faq_intent:
+        category = str(faq_intent.get("category") or "").upper()
+        try:
+            confidence = float(faq_intent.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if category in _CONVERSION_FAQ_CATEGORIES and confidence >= _CONVERSION_FAQ_MIN_CONFIDENCE:
+            return ConversionSignal(
+                reason=f"Consulta comercial ({category}, confianza {confidence:.0%})"
+            )
+
+    intent_text = (guardian_result.intent or "").lower()
+    if any(keyword in intent_text for keyword in _CONVERSION_INTENT_KEYWORDS):
+        return ConversionSignal(
+            reason=f"Intencion comercial detectada: {guardian_result.intent}"
+        )
+
+    return None
 
 
 class AgentOrchestrator:
@@ -147,12 +196,63 @@ class AgentOrchestrator:
 
         return history
 
+    async def _maybe_dispatch_conversion_alert(
+        self,
+        *,
+        user_number: str,
+        channel: str,
+        cleaned_message: str,
+        reply_message: str,
+        guardian_result: GuardianResult,
+        faq_intent: Optional[Dict[str, Any]],
+    ) -> None:
+        """Send a deduplicated conversion alert without risking the customer reply."""
+        signal = _detect_conversion_signal(guardian_result, faq_intent)
+        if not signal:
+            return
+
+        now = time.monotonic()
+        cache_key = (self.tenant_id or "", user_number)
+        last_sent = _conversion_alert_sent.get(cache_key)
+        if last_sent is not None and (now - last_sent) < _CONVERSION_ALERT_TTL_SECONDS:
+            return
+
+        recent_messages = f"Cliente: {cleaned_message[:300]}\nBot: {reply_message[:300]}"
+        try:
+            await alert_notification_service.dispatch_alert(
+                tenant_id=self.tenant_id or "",
+                alert_type="conversion",
+                channel=channel,
+                customer_id=user_number,
+                reason=signal.reason,
+                recent_messages=recent_messages,
+                bot_config=self._bot_config,
+            )
+            if len(_conversion_alert_sent) >= 1000:
+                expired = [
+                    k for k, ts in _conversion_alert_sent.items()
+                    if (now - ts) >= _CONVERSION_ALERT_TTL_SECONDS
+                ]
+                for k in expired:
+                    _conversion_alert_sent.pop(k, None)
+            _conversion_alert_sent[cache_key] = now
+        except Exception as exc:
+            logger.warning(
+                "conversion_alert_dispatch_failed",
+                extra={
+                    "tenant_id": self.tenant_id or "",
+                    "user": user_number,
+                    "error": str(exc),
+                },
+            )
+
     async def process_message(
         self,
         user_number: str,
         message: str,
         *,
         message_id: Optional[str] = None,
+        channel: str = "whatsapp",
     ) -> AgentResponse:
         """Process inbound message and return response."""
 
@@ -275,7 +375,7 @@ class AgentOrchestrator:
                 },
             )
 
-            return AgentResponse(
+            agent_response = AgentResponse(
                 message=faq_answer,
                 intent=guardian_result.intent,
                 category=guardian_result.category,
@@ -285,48 +385,58 @@ class AgentOrchestrator:
                     "confidence": final_confidence,
                 },
             )
+        else:
+            # Fall back to standard RAG if not a clear FAQ or low FAQ confidence
+            rag_response: RAGResponse = await asyncio.to_thread(self.rag.answer, cleaned, history)
+            logger.info(
+                "rag_answer",
+                extra={
+                    "user": user_number,
+                    "confidence": rag_response.confidence,
+                    "sources": rag_response.sources,
+                },
+            )
+            await self._store_message(
+                user_number,
+                "assistant",
+                rag_response.answer,
+                {"confidence": rag_response.confidence, "sources": rag_response.sources},
+            )
 
-        # Fall back to standard RAG if not a clear FAQ or low FAQ confidence
-        rag_response: RAGResponse = await asyncio.to_thread(self.rag.answer, cleaned, history)
-        logger.info(
-            "rag_answer",
-            extra={
-                "user": user_number,
-                "confidence": rag_response.confidence,
-                "sources": rag_response.sources,
-            },
-        )
-        await self._store_message(
-            user_number,
-            "assistant",
-            rag_response.answer,
-            {"confidence": rag_response.confidence, "sources": rag_response.sources},
-        )
+            # Try to escalate on low confidence, but don't fail the request if escalation fails
+            if rag_response.confidence < 0.5 and guardian_result.category == "VALID_QUERY":
+                conv = await self._store_message(user_number, "system", "Confianza baja, escalando")
+                try:
+                    await self.handoff.escalate(conv, user_number, metadata={"reason": "low_confidence"}, tenant_id=self.tenant_id or "", phone_id=self.whatsapp_service.phone_id or "", last_message=message)
+                except Exception as exc:
+                    logger.warning(
+                        "escalation_failed_gracefully",
+                        extra={
+                            "user": user_number,
+                            "error": str(exc),
+                            "confidence": rag_response.confidence,
+                        }
+                    )
 
-        # Try to escalate on low confidence, but don't fail the request if escalation fails
-        if rag_response.confidence < 0.5 and guardian_result.category == "VALID_QUERY":
-            conv = await self._store_message(user_number, "system", "Confianza baja, escalando")
-            try:
-                await self.handoff.escalate(conv, user_number, metadata={"reason": "low_confidence"}, tenant_id=self.tenant_id or "", phone_id=self.whatsapp_service.phone_id or "", last_message=message)
-            except Exception as exc:
-                logger.warning(
-                    "escalation_failed_gracefully",
-                    extra={
-                        "user": user_number,
-                        "error": str(exc),
-                        "confidence": rag_response.confidence,
-                    }
-                )
+            agent_response = AgentResponse(
+                message=rag_response.answer,
+                intent=guardian_result.intent,
+                category=guardian_result.category,
+                data={
+                    "guardian": guardian_result.model_dump(),
+                    "rag": rag_response.model_dump(),
+                },
+            )
 
-        return AgentResponse(
-            message=rag_response.answer,
-            intent=guardian_result.intent,
-            category=guardian_result.category,
-            data={
-                "guardian": guardian_result.model_dump(),
-                "rag": rag_response.model_dump(),
-            },
+        await self._maybe_dispatch_conversion_alert(
+            user_number=user_number,
+            channel=channel,
+            cleaned_message=cleaned,
+            reply_message=agent_response.message,
+            guardian_result=guardian_result,
+            faq_intent=faq_intent,
         )
+        return agent_response
 
     async def handle_outside_window(self, user_number: str, response: AgentResponse) -> str:
         """Fallback to an approved template when outside the 24h window."""

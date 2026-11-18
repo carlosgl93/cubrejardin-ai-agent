@@ -15,7 +15,7 @@ class EmailService:
     def __init__(self, api_key: Optional[str] = None, from_email: Optional[str] = None) -> None:
         settings = get_settings()
         self.api_key = api_key or settings.resend_api_key
-        self.from_email = from_email or settings.resend_from_email or "alertas@sgcloud.cl"
+        self.from_email = from_email or settings.resend_from_email or "alertas@mail.sgcloud.cl"
         self._client = httpx.AsyncClient(timeout=10.0)
 
     async def close(self) -> None:
@@ -110,6 +110,6 @@ class EmailService:
 </body>
 </html>"""
 
-        subject = f"[{badge_text}] {tenant_name} &bull; Cliente {customer_id} ({channel})"
+        subject = f"[{badge_text}] {tenant_name} • Cliente {customer_id} ({channel})"
         text = f"{title}\nTenant: {tenant_name}\nCanal: {channel}\nCliente: {customer_id}\nMotivo: {reason}\n\nHistorial:\n{recent_messages}\n\nLink: {action_url}"
         return await self.send_email(to=to, subject=subject, html=html, text=text)

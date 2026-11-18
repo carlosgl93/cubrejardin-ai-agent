@@ -183,6 +183,12 @@ class BotConfigRequest(BaseModel):
     business_hours: dict | None = None
     handoff_auto_return_enabled: bool | None = None
     handoff_timeout_minutes: int | None = None
+    notify_email_enabled: bool | None = None
+    notify_email_recipient: str | None = None
+    notify_whatsapp_enabled: bool | None = None
+    notify_whatsapp_recipient: str | None = None
+    notify_conversion_alerts: bool | None = None
+    notify_handoff_alerts: bool | None = None
 
 
 class BotConfigResponse(BaseModel):
@@ -194,6 +200,36 @@ class BotConfigResponse(BaseModel):
     business_hours: dict
     handoff_auto_return_enabled: bool = True
     handoff_timeout_minutes: int = 10
+    notify_email_enabled: bool = False
+    notify_email_recipient: str | None = None
+    notify_whatsapp_enabled: bool = False
+    notify_whatsapp_recipient: str | None = None
+    notify_conversion_alerts: bool = True
+    notify_handoff_alerts: bool = True
+
+
+def _row_to_bot_config_response(row: dict) -> BotConfigResponse:
+    """Map a tenant_bot_config row to BotConfigResponse with explicit defaults."""
+    auto_return = row.get("handoff_auto_return_enabled")
+    timeout_min = row.get("handoff_timeout_minutes")
+    conv_alerts = row.get("notify_conversion_alerts")
+    handoff_alerts = row.get("notify_handoff_alerts")
+    return BotConfigResponse(
+        id=row["id"],
+        tenant_id=row["tenant_id"],
+        system_prompt=row.get("system_prompt"),
+        greeting=row.get("greeting"),
+        handoff_trigger=row.get("handoff_trigger"),
+        business_hours=row.get("business_hours") or {},
+        handoff_auto_return_enabled=True if auto_return is None else bool(auto_return),
+        handoff_timeout_minutes=int(timeout_min) if timeout_min is not None else 10,
+        notify_email_enabled=bool(row.get("notify_email_enabled")),
+        notify_email_recipient=row.get("notify_email_recipient") or None,
+        notify_whatsapp_enabled=bool(row.get("notify_whatsapp_enabled")),
+        notify_whatsapp_recipient=row.get("notify_whatsapp_recipient") or None,
+        notify_conversion_alerts=True if conv_alerts is None else bool(conv_alerts),
+        notify_handoff_alerts=True if handoff_alerts is None else bool(handoff_alerts),
+    )
 
 
 @router.get("/config", response_model=BotConfigResponse)
@@ -208,7 +244,6 @@ async def get_bot_config(ctx: TenantContext = Depends(get_tenant_context)):
         .execute()
     )
     if not result.data:
-        # Return empty defaults — config not yet saved
         return BotConfigResponse(
             id="",
             tenant_id=ctx.tenant_id,
@@ -216,22 +251,8 @@ async def get_bot_config(ctx: TenantContext = Depends(get_tenant_context)):
             greeting=None,
             handoff_trigger=None,
             business_hours={"enabled": False, "timezone": "America/Santiago", "schedule": {}},
-            handoff_auto_return_enabled=True,
-            handoff_timeout_minutes=10,
         )
-    row = result.data[0]
-    auto_return = row.get("handoff_auto_return_enabled")
-    timeout_min = row.get("handoff_timeout_minutes")
-    return BotConfigResponse(
-        id=row["id"],
-        tenant_id=row["tenant_id"],
-        system_prompt=row.get("system_prompt"),
-        greeting=row.get("greeting"),
-        handoff_trigger=row.get("handoff_trigger"),
-        business_hours=row.get("business_hours") or {},
-        handoff_auto_return_enabled=True if auto_return is None else bool(auto_return),
-        handoff_timeout_minutes=int(timeout_min) if timeout_min is not None else 10,
-    )
+    return _row_to_bot_config_response(result.data[0])
 
 
 @router.put("/config", response_model=BotConfigResponse)
@@ -259,16 +280,4 @@ async def upsert_bot_config(
     from services.tenant_config_service import invalidate_tenant_bot_config
     invalidate_tenant_bot_config(ctx.tenant_id)
 
-    row = result.data[0]
-    auto_return = row.get("handoff_auto_return_enabled")
-    timeout_min = row.get("handoff_timeout_minutes")
-    return BotConfigResponse(
-        id=row["id"],
-        tenant_id=row["tenant_id"],
-        system_prompt=row.get("system_prompt"),
-        greeting=row.get("greeting"),
-        handoff_trigger=row.get("handoff_trigger"),
-        business_hours=row.get("business_hours") or {},
-        handoff_auto_return_enabled=True if auto_return is None else bool(auto_return),
-        handoff_timeout_minutes=int(timeout_min) if timeout_min is not None else 10,
-    )
+    return _row_to_bot_config_response(result.data[0])
