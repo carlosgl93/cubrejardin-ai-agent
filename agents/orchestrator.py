@@ -286,7 +286,7 @@ class AgentOrchestrator:
 
         if guardian_result.category == "ESCALATION_REQUEST":
             conv = await self._store_message(user_number, "system", "Escalación solicitada")
-            message_text = await self.handoff.escalate(conv, user_number, metadata={"reason": "user_request"}, tenant_id=self.tenant_id or "", phone_id=self.whatsapp_service.phone_id or "", last_message=message)
+            message_text = await self.handoff.escalate(conv, user_number, metadata={"reason": "user_request"}, tenant_id=self.tenant_id or "", phone_id=self.whatsapp_service.phone_id or "", last_message=message, channel=channel)
             return AgentResponse(
                 message=message_text,
                 intent="handoff",
@@ -407,7 +407,7 @@ class AgentOrchestrator:
             if rag_response.confidence < 0.5 and guardian_result.category == "VALID_QUERY":
                 conv = await self._store_message(user_number, "system", "Confianza baja, escalando")
                 try:
-                    await self.handoff.escalate(conv, user_number, metadata={"reason": "low_confidence"}, tenant_id=self.tenant_id or "", phone_id=self.whatsapp_service.phone_id or "", last_message=message)
+                    await self.handoff.escalate(conv, user_number, metadata={"reason": "low_confidence"}, tenant_id=self.tenant_id or "", phone_id=self.whatsapp_service.phone_id or "", last_message=message, channel=channel)
                 except Exception as exc:
                     logger.warning(
                         "escalation_failed_gracefully",

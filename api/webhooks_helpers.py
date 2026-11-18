@@ -245,7 +245,7 @@ async def run_bot_pipeline(
     )
     try:
         agent_response = await orchestrator.process_message(
-            channel_user_id, user_message, message_id=message_id
+            channel_user_id, user_message, message_id=message_id, channel=channel
         )
         text = getattr(agent_response, "message", None)
         if text:

@@ -134,6 +134,7 @@ class HandoffAgent:
         reason: str,
         tenant_id: str,
         phone_id: str,
+        channel: str = "whatsapp",
     ) -> Optional[int]:
         """Send handoff notification to Telegram agent and persist active handoff."""
 
@@ -152,7 +153,7 @@ class HandoffAgent:
                 .select("role, message")
                 .eq("tenant_id", tenant_id)
                 .eq("channel_user_id", user_number)
-                .eq("channel", "whatsapp")
+                .eq("channel", channel)
                 .order("created_at", desc=True)
                 .limit(6)
                 .execute()
@@ -192,6 +193,7 @@ class HandoffAgent:
                 "telegram_chat_id": chat_id,
                 "telegram_message_id": message_id,
                 "wa_service_phone_id": phone_id,
+                "channel": channel,
                 "status": "active",
             }).execute()
         except Exception as exc:
@@ -209,6 +211,7 @@ class HandoffAgent:
         tenant_id: str = "",
         phone_id: str = "",
         last_message: str = "",
+        channel: str = "whatsapp",
     ) -> str:
         """Escalate conversation and notify user + Telegram agent."""
 
@@ -218,7 +221,7 @@ class HandoffAgent:
             "Gracias por tu paciencia. Un especialista humano revisará tu caso y te contactará en menos de 2 horas."
         )
         try:
-            if self.whatsapp_service and phone_id and not phone_id.startswith("web"):
+            if channel == "whatsapp" and self.whatsapp_service and phone_id and not phone_id.startswith("web"):
                 await self.whatsapp_service.send_text_message(user_number, message)
         except Exception as exc:
             logger.warning(
@@ -232,6 +235,7 @@ class HandoffAgent:
             reason=reason,
             tenant_id=tenant_id,
             phone_id=phone_id,
+            channel=channel,
         )
         try:
             from services.alert_notification_service import dispatch_alert
@@ -239,7 +243,7 @@ class HandoffAgent:
             await dispatch_alert(
                 tenant_id=tenant_id,
                 alert_type="handoff",
-                channel="whatsapp" if phone_id and not phone_id.startswith("web") else "multichannel",
+                channel=channel,
                 customer_id=user_number,
                 reason=reason,
                 recent_messages=last_message or "(sin mensaje)",
